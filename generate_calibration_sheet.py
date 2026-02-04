@@ -277,9 +277,9 @@ def draw_calibration_sheet(filename="calibration_target.pdf"):
     
     c.setFillColor(colors.gray)
     c.setFont("Helvetica", 14)
-    c.drawCentredString(width/2, height/2 + 10*mm, "BEAN / GRIND STAGE")
+    # c.drawCentredString(width/2, height/2 + 10*mm, "BEAN / GRIND STAGE")
     c.setFont("Helvetica", 10)
-    c.drawCentredString(width/2, height/2 + 5*mm, "(Place Sample Here)")
+    # c.drawCentredString(width/2, height/2 + 5*mm, "(Place Sample Here)")
 
     # ---------------------------------------------------------
     # Metadata

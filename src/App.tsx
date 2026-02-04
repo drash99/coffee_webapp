@@ -1,9 +1,11 @@
 import { useState, useEffect, useRef } from 'react';
-import { Camera, Coffee, Activity } from 'lucide-react';
-import { Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend } from 'chart.js';
-import { Scatter } from 'react-chartjs-2';
+import { Coffee, Activity } from 'lucide-react';
+import { Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement, BarElement, Title, Tooltip, Legend } from 'chart.js';
+import { Scatter, Bar } from 'react-chartjs-2';
+import { ImageUpload } from './components/ImageUpload';
+import { ResultsDisplay } from './components/ResultsDisplay';
 
-ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend);
+ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, BarElement, Title, Tooltip, Legend);
 
 function App() {
   const [dose, setDose] = useState<number>(18.0);
@@ -15,6 +17,9 @@ function App() {
   const workerRef = useRef<Worker | null>(null);
   const [cvReady, setCvReady] = useState(false);
   const [measuredRulerMm, setMeasuredRulerMm] = useState<number>(100.0);
+  const [analysisMode, setAnalysisMode] = useState<'bean' | 'grind' | null>(null);
+  const [analysisResults, setAnalysisResults] = useState<any>(null);
+  const [processing, setProcessing] = useState(false);
 
   useEffect(() => {
     // Calculate Extraction %: (Yield * TDS) / Dose
@@ -33,6 +38,13 @@ function App() {
       if (type === 'CV_READY') {
         console.log('OpenCV.js is ready in the worker!');
         setCvReady(true);
+      } else if (type === 'ANALYSIS_COMPLETE') {
+        setAnalysisResults(payload);
+        setProcessing(false);
+      } else if (type === 'ERROR') {
+        console.error('CV Error:', payload);
+        alert(`Error: ${payload}`);
+        setProcessing(false);
       }
     };
 
@@ -42,6 +54,58 @@ function App() {
       workerRef.current?.terminate();
     };
   }, []);
+
+  const handleImageSelect = async (file: File, mode: 'bean' | 'grind') => {
+    if (!cvReady) {
+      alert('OpenCV is not ready yet. Please wait...');
+      return;
+    }
+
+    setProcessing(true);
+    setAnalysisMode(mode);
+    setAnalysisResults(null);
+
+    // Read image file
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    
+    img.onload = () => {
+      // Create canvas to get ImageData
+      const canvas = document.createElement('canvas');
+      canvas.width = img.width;
+      canvas.height = img.height;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        setProcessing(false);
+        return;
+      }
+      
+      ctx.drawImage(img, 0, 0);
+      const imageData = ctx.getImageData(0, 0, img.width, img.height);
+      
+      // Send to worker
+      workerRef.current?.postMessage({
+        type: 'PROCESS_IMAGE',
+        payload: {
+          imageData,
+          width: img.width,
+          height: img.height,
+          rulerLengthMm: measuredRulerMm,
+          mode
+        }
+      });
+      
+      URL.revokeObjectURL(url);
+    };
+    
+    img.onerror = () => {
+      alert('Failed to load image');
+      setProcessing(false);
+      URL.revokeObjectURL(url);
+    };
+    
+    img.src = url;
+  };
 
   const chartData = {
     datasets: [
@@ -145,35 +209,47 @@ function App() {
           <Scatter options={chartOptions} data={chartData} />
         </div>
 
-        {/* Camera/CV Placeholder */}
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
-          <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
-            <Camera className="w-5 h-5" /> Bean Analysis
-          </h2>
-          
-          <div className="mb-4">
-            <label className="block text-xs font-medium text-gray-500 mb-1">
-              Calibration: Measured Length of 10cm Line (mm)
-            </label>
-            <input 
-              type="number" 
-              value={measuredRulerMm} 
-              onChange={(e) => setMeasuredRulerMm(parseFloat(e.target.value) || 100)}
-              className="w-full p-2 border rounded-lg bg-gray-50" 
-              placeholder="100.0"
-            />
-            <p className="text-xs text-gray-400 mt-1">
-              Measure the "10 cm Scale" on your printed sheet to correct for printer scaling.
-            </p>
-          </div>
-
-          <p className="text-sm text-gray-500 mb-4">
-            Place beans on the "Stage" area of the calibration sheet.
+        {/* Calibration Input */}
+        <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100">
+          <label className="block text-xs font-medium text-gray-500 mb-1">
+            Calibration: Measured Length of 10cm Line (mm)
+          </label>
+          <input 
+            type="number" 
+            value={measuredRulerMm} 
+            onChange={(e) => setMeasuredRulerMm(parseFloat(e.target.value) || 100)}
+            className="w-full p-2 border rounded-lg bg-gray-50" 
+            placeholder="100.0"
+            disabled={processing}
+          />
+          <p className="text-xs text-gray-400 mt-1">
+            Measure the "10 cm Scale" on your printed sheet to correct for printer scaling.
           </p>
-          <button className="w-full py-3 bg-gray-900 text-white rounded-lg font-medium hover:bg-gray-800 transition-colors">
-            Open Camera
-          </button>
         </div>
+
+        {/* Image Upload Buttons */}
+        <div className="grid grid-cols-2 gap-4">
+          <ImageUpload 
+            mode="bean" 
+            onImageSelect={(file) => handleImageSelect(file, 'bean')}
+            disabled={!cvReady || processing}
+          />
+          <ImageUpload 
+            mode="grind" 
+            onImageSelect={(file) => handleImageSelect(file, 'grind')}
+            disabled={!cvReady || processing}
+          />
+        </div>
+
+        {/* Results Display */}
+        {analysisMode && (
+          <ResultsDisplay 
+            mode={analysisMode} 
+            data={analysisResults?.mode === analysisMode ? 
+              (analysisMode === 'grind' ? analysisResults.particles : analysisResults.beans) : []}
+            loading={processing}
+          />
+        )}
       </main>
     </div>
   )

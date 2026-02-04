@@ -134,3 +134,30 @@ calibration_target.pdf
 __pycache__/
 *.pyc
 
+# Debug/Output files
+output/
+*.csv
+debug_*.jpg
+debug_*.png
+stage_*.jpg
+warped*.jpg
+lut_curves.png
+size_distribution.png
+bean_analysis.png
+
+# Test images
+IMG_*.JPEG
+IMG_*.jpg
+IMG_*.png
+test_img.*
+test_*.jpg
+test_*.jpeg
+test_*.png
+
+# OpenCV build artifacts
+opencv_build/
+opencv.js
+opencv.wasm
+public/opencv.js
+public/opencv.wasm
+
