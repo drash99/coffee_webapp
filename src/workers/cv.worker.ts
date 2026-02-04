@@ -21,18 +21,28 @@ const CALIB_CONFIG = {
   MARKER_SIZE_MM: 10,
   
   // Grayscale Patch Centers in Warped Image Coordinates (mm)
-  // PDF Gen Logic:
-  //   Gray Row Y relative to margin_y = 201mm.
-  //   Image Y = 250 - 201 = 49mm (Top edge). Patch Height 12mm. Center Y = 49 + 6 = 55mm.
-  //   Start X relative to margin_x = 100mm. Step 14mm.
-  //   Centers: 106, 120, 134, 148, 162
-  GRAY_PATCH_Y_MM: 55,
-  GRAY_PATCH_XS_MM: [106, 120, 134, 148, 162], // White, 25%, 50%, 75%, Black
+  // Updated for 11-step ramp
+  // PDF Logic:
+  //   patch_start_y (CMYK) = margin_y + 215mm.
+  //   gray_y = patch_start_y - (8mm + 6mm) = 215 - 14 = 201mm (relative to margin bottom).
+  //   Image Y (from Top 250mm) = 250 - 201 = 49mm.
+  //   Patch Height 8mm. Center Y = 49 + 4 = 53mm.
+  //
+  //   X Logic:
+  //   Right aligned with CMYK end.
+  //   CMYK End X (rel margin) = 100mm (Start) + 4*12 + 3*2 = 100 + 48 + 6 = 154mm.
+  //   Gray Row Width = 11*8 + 10*1.5 = 88 + 15 = 103mm.
+  //   Gray Start X = 154 - 103 = 51mm.
+  //   Step X = 8 + 1.5 = 9.5mm.
+  //   Centers X = 51 + 4 + i*9.5 = 55 + i*9.5
+  
+  GRAY_PATCH_Y_MM: 53,
+  GRAY_PATCH_XS_MM: Array.from({length: 11}, (_, i) => 55 + i * 9.5), // 0% to 100%
 
-  // Expected Grayscale Values (0-255) for the patches
-  // Assuming 0% ink is Paper White (~245-255) and 100% is Ink Black (~20-40)
-  // We map these observed values to IDEAL Linear Grayscale values.
-  EXPECTED_LEVELS: [255, 191, 127, 63, 20]
+  // Expected Grayscale Values (0-255) for the patches (0%, 10%, ... 100% Ink)
+  // 0% Ink = 255 (White), 100% Ink = 20 (Black approx)
+  // Linear ramp expectation
+  EXPECTED_LEVELS: Array.from({length: 11}, (_, i) => Math.round(255 - (i * (255 - 20) / 10)))
 };
 
 let isCvReady = false;
@@ -94,7 +104,6 @@ function processImage(input: { imageData: ImageData, width: number, height: numb
   cv.findContours(binary, contours, hierarchy, cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE);
 
   // Find the 4 corner markers
-  // We look for contours that approximate to squares and have roughly the expected size ratio relative to image
   let markers = [];
   const minArea = (width * height) * 0.001; // minimal size constraint
   
@@ -109,7 +118,6 @@ function processImage(input: { imageData: ImageData, width: number, height: numb
     
     // Check if square (4 corners)
     if (approx.rows === 4) {
-      // Calculate center
       let M = cv.moments(cnt);
       let cx = M.m10 / M.m00;
       let cy = M.m01 / M.m00;
@@ -119,17 +127,12 @@ function processImage(input: { imageData: ImageData, width: number, height: numb
     }
   }
 
-  // If we don't find exactly 4 (or more and filter), we might fail. 
-  // For MVP, assume the 4 largest squares are corners.
-  // Sort by area logic or spatial logic would be better.
-  
   if (markers.length < 4) {
     src.delete(); gray.delete(); binary.delete(); contours.delete(); hierarchy.delete();
     throw new Error(`Found only ${markers.length} markers. Need 4.`);
   }
 
   // Sort markers to TopLeft, TopRight, BottomRight, BottomLeft
-  // Simple sorting: sort by Y to separate Top/Bottom, then by X
   markers.sort((a, b) => a.y - b.y);
   const top = markers.slice(0, 2).sort((a, b) => a.x - b.x);
   const bottom = markers.slice(2, 4).sort((a, b) => a.x - b.x);
@@ -141,6 +144,11 @@ function processImage(input: { imageData: ImageData, width: number, height: numb
   const dstWidth = CALIB_CONFIG.REAL_WIDTH_MM * scale;
   const dstHeight = CALIB_CONFIG.REAL_HEIGHT_MM * scale;
 
+  // Marker offsets (center of 10mm square is 5mm from corner edge)
+  const offset = CALIB_CONFIG.MARKER_SIZE_MM / 2 * scale;
+  const w = CALIB_CONFIG.REAL_WIDTH_MM * scale;
+  const h = CALIB_CONFIG.REAL_HEIGHT_MM * scale;
+
   let srcTri = cv.matFromArray(4, 1, cv.CV_32FC2, [
     corners[0].x, corners[0].y,
     corners[1].x, corners[1].y,
@@ -148,30 +156,8 @@ function processImage(input: { imageData: ImageData, width: number, height: numb
     corners[3].x, corners[3].y
   ]);
   
-  // Destination points (account for marker margin if needed, but here we mapped the OUTER corners of the content rect)
-  // Wait, in the PDF the markers are INSIDE the calibration rect corners.
-  // TL is at (margin_x, margin_y + h - marker). 
-  // Let's assume the user cropped to include the markers.
-  // We map the CENTER of the markers.
-  // Marker center is offset by 5mm (half of 10mm) from the actual corner lines? 
-  // In PDF: draw_fiducial(margin_x, margin_y) -> draws rect at x,y. Center is x+5, y+5.
-  
-  // We define 0,0 as the top-left of the calibration rect.
-  // TL Center: (5mm, 5mm)
-  // TR Center: (W-5mm, 5mm)
-  // BR Center: (W-5mm, H-5mm)
-  // BL Center: (5mm, H-5mm)
-  
-  const offset = CALIB_CONFIG.MARKER_SIZE_MM / 2 * scale;
-  const w = CALIB_CONFIG.REAL_WIDTH_MM * scale;
-  const h = CALIB_CONFIG.REAL_HEIGHT_MM * scale;
-
   let dstTri = cv.matFromArray(4, 1, cv.CV_32FC2, [
-    offset, offset,          // TL (Top-Left on paper is high Y in PDF gen, but 0 in image coords usually? Wait. Standard image coords: 0,0 is Top-Left)
-                             // PDF Gen: (0,0) is Bottom-Left. 
-                             // Image: (0,0) is Top-Left.
-                             // Let's stick to Image Coordinates for the Warp.
-                             // TL in Image = Top-Left visual corner.
+    offset, offset,          // TL
     w - offset, offset,      // TR
     w - offset, h - offset,  // BR
     offset, h - offset       // BL
@@ -182,13 +168,12 @@ function processImage(input: { imageData: ImageData, width: number, height: numb
   cv.warpPerspective(src, warped, M, new cv.Size(dstWidth, dstHeight));
 
   // 4. Advanced Color Calibration (Grayscale Ramp)
-  // We sample all 5 patches to build a per-channel Look-Up Table (LUT)
-  // This handles both White Balance (aligning RGB channels) and Gamma (linearizing brightness)
+  // We sample all 11 patches to build a per-channel Look-Up Table (LUT)
   
   const patchY = CALIB_CONFIG.GRAY_PATCH_Y_MM * scale;
-  const sampleRadius = 2 * scale;
+  const sampleRadius = 1.5 * scale; // Reduce radius slightly for smaller patches
   
-  // Store observed mean RGB for each patch [White, 25%, 50%, 75%, Black]
+  // Store observed mean RGB for each patch
   const observedRGBs: number[][] = [];
   
   CALIB_CONFIG.GRAY_PATCH_XS_MM.forEach(x_mm => {
@@ -205,8 +190,6 @@ function processImage(input: { imageData: ImageData, width: number, height: numb
   });
 
   // Build Look-Up Tables for R, G, B
-  // We create a mapping from 0-255 (Input) -> 0-255 (Corrected)
-  // using Piecewise Linear Interpolation between the 5 observed points.
   const luts = {
     r: buildLut(observedRGBs.map(p => p[0]), CALIB_CONFIG.EXPECTED_LEVELS),
     g: buildLut(observedRGBs.map(p => p[1]), CALIB_CONFIG.EXPECTED_LEVELS),
@@ -224,21 +207,16 @@ function processImage(input: { imageData: ImageData, width: number, height: numb
   
   let stageRoi = warped.roi(new cv.Rect(stageX, stageY, stageW, stageH));
   
-  // For detection, we can use the Green channel or Luma from the original warped image
-  // But strictly, we should use corrected colors. 
-  // However, thresholding is robust enough on raw data usually. 
-  // Let's use raw grayscale for detection to save perf, and apply correction ONLY to the measured bean colors.
-  
   let stageGray = new cv.Mat();
   cv.cvtColor(stageRoi, stageGray, cv.COLOR_RGBA2GRAY);
-  cv.threshold(stageGray, stageGray, 100, 255, cv.THRESH_BINARY_INV); // Assume light background, dark beans
+  cv.threshold(stageGray, stageGray, 100, 255, cv.THRESH_BINARY_INV);
   
   let beanContours = new cv.MatVector();
   let beanHierarchy = new cv.Mat();
   cv.findContours(stageGray, beanContours, beanHierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
   
   let beanData = [];
-  const minBeanArea = 5 * scale * scale; // Minimal noise filter
+  const minBeanArea = 5 * scale * scale; 
   
   for (let i = 0; i < beanContours.size(); ++i) {
     let bCnt = beanContours.get(i);
@@ -248,13 +226,10 @@ function processImage(input: { imageData: ImageData, width: number, height: numb
     // Fit Ellipse
     if (bCnt.rows >= 5) {
         let ellipse = cv.fitEllipse(bCnt);
-        // ellipse.size.width / height are in pixels
-        // Convert to mm
         let majorAxis = Math.max(ellipse.size.width, ellipse.size.height) / scale;
         let minorAxis = Math.min(ellipse.size.width, ellipse.size.height) / scale;
         
         // Get Color from original ROI
-        // Mask for this bean
         let mask = new cv.Mat.zeros(stageRoi.rows, stageRoi.cols, cv.CV_8UC1);
         cv.drawContours(mask, beanContours, i, new cv.Scalar(255), -1);
         let meanBeanColor = cv.mean(stageRoi, mask);
@@ -265,7 +240,6 @@ function processImage(input: { imageData: ImageData, width: number, height: numb
         let g = applyLut(meanBeanColor[1], luts.g);
         let b = applyLut(meanBeanColor[2], luts.b);
         
-        // Simple Lightness (L from Lab approx)
         let luma = 0.299*r + 0.587*g + 0.114*b;
 
         beanData.push({
@@ -283,10 +257,9 @@ function processImage(input: { imageData: ImageData, width: number, height: numb
 
   return {
     wbFactors: { 
-        // Just return the scaling for 50% gray for reference/debug
-        r: 127 / observedRGBs[2][0], 
-        g: 127 / observedRGBs[2][1], 
-        b: 127 / observedRGBs[2][2] 
+        r: 127 / (observedRGBs[5] ? observedRGBs[5][0] : 1), // 50% is index 5
+        g: 127 / (observedRGBs[5] ? observedRGBs[5][1] : 1), 
+        b: 127 / (observedRGBs[5] ? observedRGBs[5][2] : 1) 
     },
     beans: beanData,
     debugUrl: ''
@@ -297,23 +270,20 @@ function processImage(input: { imageData: ImageData, width: number, height: numb
 function buildLut(observed: number[], expected: number[]): Uint8Array {
     const lut = new Uint8Array(256);
     
-    // Sort pairs by observed value just in case, though they should be monotonic
+    // Sort pairs by observed value
     const points = observed.map((val, i) => ({ x: val, y: expected[i] }));
     points.sort((a, b) => a.x - b.x);
 
-    // Fill LUT
     for (let i = 0; i < 256; i++) {
-        // Find surrounding points
         if (i <= points[0].x) {
-            lut[i] = points[0].y; // Clamp bottom
+            lut[i] = points[0].y; 
         } else if (i >= points[points.length - 1].x) {
-            lut[i] = points[points.length - 1].y; // Clamp top
+            lut[i] = points[points.length - 1].y;
         } else {
-            // Interpolate
             for (let j = 0; j < points.length - 1; j++) {
                 if (i >= points[j].x && i <= points[j + 1].x) {
                     const range = points[j+1].x - points[j].x;
-                    const ratio = (i - points[j].x) / range;
+                    const ratio = (range === 0) ? 0 : (i - points[j].x) / range;
                     lut[i] = Math.round(points[j].y + ratio * (points[j+1].y - points[j].y));
                     break;
                 }
@@ -327,3 +297,5 @@ function applyLut(val: number, lut: Uint8Array): number {
     const idx = Math.max(0, Math.min(255, Math.round(val)));
     return lut[idx];
 }
+
+export {};

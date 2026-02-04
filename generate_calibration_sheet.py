@@ -4,6 +4,7 @@ try:
     from reportlab.pdfgen import canvas
     from reportlab.lib.pagesizes import LETTER
     from reportlab.lib import colors
+    from reportlab.lib.colors import CMYKColor
     from reportlab.lib.units import mm
 except ImportError:
     print("This script requires 'reportlab'. Please install it using:")
@@ -117,40 +118,47 @@ def draw_calibration_sheet(filename="calibration_target.pdf"):
     patch_start_y = margin_y + calib_h - 35 * mm
     
     # CMYK Row
-    c.setFillColor(colors.cyan); c.rect(patch_start_x, patch_start_y, patch_size, patch_size, fill=1, stroke=1)
-    c.setFillColor(colors.magenta); c.rect(patch_start_x + 1*(patch_size+gap), patch_start_y, patch_size, patch_size, fill=1, stroke=1)
-    c.setFillColor(colors.yellow); c.rect(patch_start_x + 2*(patch_size+gap), patch_start_y, patch_size, patch_size, fill=1, stroke=1)
-    c.setFillColor(colors.black); c.rect(patch_start_x + 3*(patch_size+gap), patch_start_y, patch_size, patch_size, fill=1, stroke=1)
+    # Using CMYK colors explicitly if supported, otherwise RGB fallback that maps well to CMYK.
+    # ReportLab supports CMYKColor(c,m,y,k) where 0-1.
+    c.setFillColor(CMYKColor(1, 0, 0, 0)); c.rect(patch_start_x, patch_start_y, patch_size, patch_size, fill=1, stroke=1)
+    c.setFillColor(CMYKColor(0, 1, 0, 0)); c.rect(patch_start_x + 1*(patch_size+gap), patch_start_y, patch_size, patch_size, fill=1, stroke=1)
+    c.setFillColor(CMYKColor(0, 0, 1, 0)); c.rect(patch_start_x + 2*(patch_size+gap), patch_start_y, patch_size, patch_size, fill=1, stroke=1)
+    c.setFillColor(CMYKColor(0, 0, 0, 1)); c.rect(patch_start_x + 3*(patch_size+gap), patch_start_y, patch_size, patch_size, fill=1, stroke=1)
     
-    # Grayscale Row (below CMYK)
-    gray_y = patch_start_y - (patch_size + gap)
-    # 5 steps: 0% (White), 25%, 50%, 75%, 100% (Black)
-    # ReportLab Color(g,g,g): 0=black, 1=white ? Let's verify. 
-    # Usually in computer graphics 0 is black. In ReportLab Color(1,1,1) is white.
-    # We want White -> Black
+    # Grayscale Ramp (11 steps)
+    # 0%, 10%, 20% ... 100% Black (K)
+    # Using smaller patches to fit 11 steps
+    gray_patch_size = 8 * mm
+    gray_gap = 1.5 * mm
+    num_steps = 11
     
-    # White (0% Ink)
-    c.setFillColor(colors.Color(1,1,1))
-    c.rect(patch_start_x, gray_y, patch_size, patch_size, fill=1, stroke=1)
-    c.setFillColor(colors.black); c.drawCentredString(patch_start_x + patch_size/2, gray_y + 2*mm, "0%")
-
-    # 25% Gray (75% Lightness)
-    c.setFillColor(colors.Color(0.75, 0.75, 0.75))
-    c.rect(patch_start_x + 1*(patch_size+gap), gray_y, patch_size, patch_size, fill=1, stroke=1)
+    # Calculate width to right-align
+    gray_row_width = num_steps * gray_patch_size + (num_steps - 1) * gray_gap
+    # Right align with the CMYK row end (approx)
+    # CMYK end X = patch_start_x + 4*size + 3*gap
+    cmyk_end_x = patch_start_x + 4*patch_size + 3*gap
+    gray_start_x = cmyk_end_x - gray_row_width
     
-    # 50% Gray (Target for WB)
-    c.setFillColor(colors.Color(0.5, 0.5, 0.5))
-    c.rect(patch_start_x + 2*(patch_size+gap), gray_y, patch_size, patch_size, fill=1, stroke=1)
-    c.setFillColor(colors.black); c.drawCentredString(patch_start_x + patch_size/2 + 2*(patch_size+gap), gray_y + 2*mm, "50%")
-
-    # 75% Gray (25% Lightness)
-    c.setFillColor(colors.Color(0.25, 0.25, 0.25))
-    c.rect(patch_start_x + 3*(patch_size+gap), gray_y, patch_size, patch_size, fill=1, stroke=1)
-
-    # 100% Black
-    c.setFillColor(colors.black)
-    c.rect(patch_start_x + 4*(patch_size+gap), gray_y, patch_size, patch_size, fill=1, stroke=1)
-    c.setFillColor(colors.white); c.drawCentredString(patch_start_x + patch_size/2 + 4*(patch_size+gap), gray_y + 2*mm, "100%")
+    gray_y = patch_start_y - (gray_patch_size + 6*mm) # Position below CMYK
+    
+    for i in range(num_steps):
+        # 0.0 to 1.0
+        k_val = i / 10.0
+        c.setFillColor(CMYKColor(0, 0, 0, k_val))
+        
+        gx = gray_start_x + i * (gray_patch_size + gray_gap)
+        c.rect(gx, gray_y, gray_patch_size, gray_patch_size, fill=1, stroke=1)
+        
+        # Label 0, 50, 100
+        if i == 0:
+            c.setFillColor(colors.black)
+            c.drawCentredString(gx + gray_patch_size/2, gray_y - 3*mm, "0")
+        elif i == 5:
+            c.setFillColor(colors.black)
+            c.drawCentredString(gx + gray_patch_size/2, gray_y - 3*mm, "50")
+        elif i == 10:
+            c.setFillColor(colors.black)
+            c.drawCentredString(gx + gray_patch_size/2, gray_y - 3*mm, "100")
 
     # ---------------------------------------------------------
     # 5. Central Stage
