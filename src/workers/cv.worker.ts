@@ -6,7 +6,8 @@ type WorkerMessage =
   | { type: 'PROCESS_IMAGE', payload: { 
       imageData: ImageData, 
       width: number, 
-      height: number 
+      height: number,
+      rulerLengthMm: number // User provided physical measurement of the 10cm line
     } 
   };
 
@@ -84,10 +85,14 @@ self.onmessage = async (e: MessageEvent<WorkerMessage>) => {
   }
 };
 
-function processImage(input: { imageData: ImageData, width: number, height: number }) {
-  const { imageData, width, height } = input;
+function processImage(input: { imageData: ImageData, width: number, height: number, rulerLengthMm: number }) {
+  const { imageData, width, height, rulerLengthMm } = input;
   
-  // 1. Read Image
+  // Calculate Scale Correction Factor
+  // If ruler is 100mm (design) but user measures 98mm, scale is 0.98.
+  // We warp to "Design Space" (180x250), so objects appear larger than reality if print is shrunk.
+  // We need to multiply dimensions by (Measured / Design).
+  const scaleCorrection = rulerLengthMm / 100.0;
   let src = cv.matFromImageData(imageData);
   let gray = new cv.Mat();
   
@@ -95,17 +100,24 @@ function processImage(input: { imageData: ImageData, width: number, height: numb
   cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
   
   // 2. Detect Markers (The 4 black squares at corners)
-  // Threshold to find black markers
+  // Use Adaptive Threshold to find black markers in varying lighting
   let binary = new cv.Mat();
-  cv.threshold(gray, binary, 80, 255, cv.THRESH_BINARY_INV);
+  // adaptiveThreshold(src, dst, maxValue, adaptiveMethod, thresholdType, blockSize, C)
+  cv.adaptiveThreshold(gray, binary, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 11, 2);
+  
+  // Morphological Close to fill small gaps (e.g., if grid lines cut through markers)
+  let kernel = cv.Mat.ones(5, 5, cv.CV_8U);
+  cv.morphologyEx(binary, binary, cv.MORPH_CLOSE, kernel);
+  kernel.delete();
   
   let contours = new cv.MatVector();
   let hierarchy = new cv.Mat();
+  // RETR_TREE is needed to get child contours (the white dots inside markers)
   cv.findContours(binary, contours, hierarchy, cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE);
 
   // Find the 4 corner markers
   let markers = [];
-  const minArea = (width * height) * 0.001; // minimal size constraint
+  const minArea = (width * height) * 0.0005; // Relaxed area constraint
   
   for (let i = 0; i < contours.size(); ++i) {
     let cnt = contours.get(i);
@@ -116,12 +128,33 @@ function processImage(input: { imageData: ImageData, width: number, height: numb
     let approx = new cv.Mat();
     cv.approxPolyDP(cnt, approx, 0.04 * peri, true);
     
-    // Check if square (4 corners)
-    if (approx.rows === 4) {
-      let M = cv.moments(cnt);
-      let cx = M.m10 / M.m00;
-      let cy = M.m01 / M.m00;
-      markers.push({ x: cx, y: cy, approx: approx });
+    // Check if square (4 corners) and Convex
+    if (approx.rows === 4 && cv.isContourConvex(approx)) {
+        // Aspect Ratio Check
+        let rect = cv.boundingRect(approx);
+        let aspect = rect.width / rect.height;
+        if (aspect < 0.8 || aspect > 1.2) {
+            approx.delete();
+            continue;
+        }
+
+        // Check Hierarchy for Child (Hole)
+        // hierarchy is 1 x N x 4 (CV_32SC4)
+        // [Next, Prev, First_Child, Parent]
+        let childIdx = hierarchy.intPtr(0, i)[2];
+        
+        // Markers MUST have a white dot inside (child contour)
+        // CMYK patches are solid, so they won't have a child in the binary (INV) image
+        if (childIdx !== -1) {
+             let M = cv.moments(cnt);
+             let cx = M.m10 / M.m00;
+             let cy = M.m01 / M.m00;
+             markers.push({ x: cx, y: cy, approx: approx }); // Keep approx to delete later if needed? 
+             // Actually we should clone or not delete yet. 
+             // JS objects hold reference.
+        } else {
+            approx.delete();
+        }
     } else {
         approx.delete();
     }
@@ -226,9 +259,15 @@ function processImage(input: { imageData: ImageData, width: number, height: numb
     // Fit Ellipse
     if (bCnt.rows >= 5) {
         let ellipse = cv.fitEllipse(bCnt);
-        let majorAxis = Math.max(ellipse.size.width, ellipse.size.height) / scale;
-        let minorAxis = Math.min(ellipse.size.width, ellipse.size.height) / scale;
+        // ellipse.size.width / height are in pixels (Warpped space)
+        // Convert to mm (1mm = 4px in warp config)
+        let majorAxisRaw = Math.max(ellipse.size.width, ellipse.size.height) / scale;
+        let minorAxisRaw = Math.min(ellipse.size.width, ellipse.size.height) / scale;
         
+        // Apply Printer Scale Correction
+        let majorAxis = majorAxisRaw * scaleCorrection;
+        let minorAxis = minorAxisRaw * scaleCorrection;
+
         // Get Color from original ROI
         let mask = new cv.Mat.zeros(stageRoi.rows, stageRoi.cols, cv.CV_8UC1);
         cv.drawContours(mask, beanContours, i, new cv.Scalar(255), -1);

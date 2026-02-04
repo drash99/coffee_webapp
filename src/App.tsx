@@ -14,6 +14,7 @@ function App() {
   // Worker reference
   const workerRef = useRef<Worker | null>(null);
   const [cvReady, setCvReady] = useState(false);
+  const [measuredRulerMm, setMeasuredRulerMm] = useState<number>(100.0);
 
   useEffect(() => {
     // Calculate Extraction %: (Yield * TDS) / Dose
@@ -149,8 +150,25 @@ function App() {
           <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
             <Camera className="w-5 h-5" /> Bean Analysis
           </h2>
+          
+          <div className="mb-4">
+            <label className="block text-xs font-medium text-gray-500 mb-1">
+              Calibration: Measured Length of 10cm Line (mm)
+            </label>
+            <input 
+              type="number" 
+              value={measuredRulerMm} 
+              onChange={(e) => setMeasuredRulerMm(parseFloat(e.target.value) || 100)}
+              className="w-full p-2 border rounded-lg bg-gray-50" 
+              placeholder="100.0"
+            />
+            <p className="text-xs text-gray-400 mt-1">
+              Measure the "10 cm Scale" on your printed sheet to correct for printer scaling.
+            </p>
+          </div>
+
           <p className="text-sm text-gray-500 mb-4">
-            Place beans on white paper with the 10mm marker.
+            Place beans on the "Stage" area of the calibration sheet.
           </p>
           <button className="w-full py-3 bg-gray-900 text-white rounded-lg font-medium hover:bg-gray-800 transition-colors">
             Open Camera
