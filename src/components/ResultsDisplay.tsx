@@ -1,13 +1,31 @@
-import { useMemo } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import { Scatter, Bar } from 'react-chartjs-2';
 
-interface ResultsDisplayProps {
+export interface ResultsDisplayProps {
   mode: 'bean' | 'grind';
   data: any[];
+  stageImageData?: { data: number[]; width: number; height: number };
   loading?: boolean;
 }
 
-export function ResultsDisplay({ mode, data, loading }: ResultsDisplayProps) {
+export function ResultsDisplay({ mode, data, stageImageData, loading }: ResultsDisplayProps) {
+  const [stageImageUrl, setStageImageUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!stageImageData?.data?.length || !stageImageData.width || !stageImageData.height) {
+      setStageImageUrl(null);
+      return;
+    }
+    const canvas = document.createElement('canvas');
+    canvas.width = stageImageData.width;
+    canvas.height = stageImageData.height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const imageData = new ImageData(new Uint8ClampedArray(stageImageData.data), stageImageData.width, stageImageData.height);
+    ctx.putImageData(imageData, 0, 0);
+    setStageImageUrl(canvas.toDataURL('image/png'));
+    return () => setStageImageUrl(null);
+  }, [stageImageData]);
   const stats = useMemo(() => {
     if (!data || data.length === 0) return null;
     
@@ -82,6 +100,13 @@ export function ResultsDisplay({ mode, data, loading }: ResultsDisplayProps) {
     return (
       <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 space-y-4">
         <h2 className="text-lg font-semibold">Grind Analysis Results</h2>
+
+        {stageImageUrl && (
+          <div className="rounded-lg overflow-hidden border border-gray-200 bg-gray-50">
+            <p className="text-xs text-gray-500 px-2 py-1">Stage (particles outlined)</p>
+            <img src={stageImageUrl} alt="Stage with particle contours" className="w-full h-auto max-h-80 object-contain" />
+          </div>
+        )}
         
         <div className="grid grid-cols-3 gap-4 mb-4">
           <div className="text-center p-3 bg-amber-50 rounded-lg">
@@ -158,6 +183,13 @@ export function ResultsDisplay({ mode, data, loading }: ResultsDisplayProps) {
     return (
       <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 space-y-4">
         <h2 className="text-lg font-semibold">Bean Analysis Results</h2>
+
+        {stageImageUrl && (
+          <div className="rounded-lg overflow-hidden border border-gray-200 bg-gray-50">
+            <p className="text-xs text-gray-500 px-2 py-1">Stage (beans outlined)</p>
+            <img src={stageImageUrl} alt="Stage with bean contours" className="w-full h-auto max-h-80 object-contain" />
+          </div>
+        )}
         
         <div className="grid grid-cols-2 gap-4 mb-4">
           <div className="text-center p-3 bg-amber-50 rounded-lg">

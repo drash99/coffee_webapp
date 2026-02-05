@@ -45,6 +45,8 @@ function App() {
         console.error('CV Error:', payload);
         alert(`Error: ${payload}`);
         setProcessing(false);
+      } else if (type === 'DEBUG') {
+        console.log('Worker DEBUG:', payload);
       }
     };
 
@@ -247,6 +249,7 @@ function App() {
             mode={analysisMode} 
             data={analysisResults?.mode === analysisMode ? 
               (analysisMode === 'grind' ? analysisResults.particles : analysisResults.beans) : []}
+            {...(analysisResults?.stageImageData && { stageImageData: analysisResults.stageImageData })}
             loading={processing}
           />
         )}

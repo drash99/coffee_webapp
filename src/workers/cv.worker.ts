@@ -1,9 +1,10 @@
 // CV Worker Implementation - Ported from test_cv.py and test_bean_cv.py
+// Loads OpenCV via fetch + Function (module worker compatible; no importScripts).
 
 type AnalysisMode = 'grind' | 'bean';
 
 type WorkerMessage = 
-  | { type: 'INIT' }
+  | { type: 'INIT'; payload?: { opencvUrl?: string } }
   | { type: 'PROCESS_IMAGE', payload: { 
       imageData: ImageData, 
       width: number, 
@@ -13,7 +14,8 @@ type WorkerMessage =
     } 
   };
 
-declare const cv: any;
+/** Module-scoped OpenCV API handle. Must be set in INIT so PROCESS_IMAGE always uses the same reference (not self.cv). */
+let cv: any = null;
 
 const CALIB_CONFIG = {
   REAL_WIDTH_MM: 180,
@@ -27,35 +29,107 @@ const CALIB_CONFIG = {
   STAGE_CENTER_X_MM: 90,
   STAGE_CENTER_Y_MM: 115,
   STAGE_RADIUS_MM: 50,
-  SCALE: 20  // Higher resolution for better detection
+  SCALE: 10  // Higher resolution for better detection
 };
 
 let isCvReady = false;
+
+/** Wait until OpenCV runtime has exposed Mat (on Module or Module.cv). Emscripten calls onRuntimeInitialized when ready; we also poll in case the callback slot isn't used. */
+async function waitForOpenCvReady(cvObj: any, timeoutMs = 8000): Promise<void> {
+  const matReady = () =>
+    (cvObj?.Mat != null && typeof cvObj.Mat === 'function') ||
+    (cvObj?.cv?.Mat != null && typeof cvObj.cv.Mat === 'function');
+  if (matReady()) return;
+
+  let resolved = false;
+  await new Promise<void>((resolve, reject) => {
+    const start = Date.now();
+    try {
+      cvObj.onRuntimeInitialized = () => {
+        resolved = true;
+        resolve();
+      };
+    } catch {}
+
+    const timer = setInterval(() => {
+      if (matReady()) {
+        clearInterval(timer);
+        if (!resolved) resolve();
+        return;
+      }
+      if (Date.now() - start > timeoutMs) {
+        clearInterval(timer);
+        reject(new Error('OpenCV init timeout: cv.Mat not available'));
+      }
+    }, 25);
+  });
+
+  if (!matReady()) {
+    throw new Error('OpenCV loaded but Mat constructor missing (wrong artifact or init not complete)');
+  }
+}
 
 self.onmessage = async (e: MessageEvent<WorkerMessage>) => {
   const msg = e.data;
 
   if (msg.type === 'INIT') {
     try {
-        // Load custom OpenCV.js with ArUco from public directory
-        // @ts-ignore
-        importScripts('./opencv.js');
-        
-        if (cv.getBuildInformation) {
-             isCvReady = true;
-             postMessage({ type: 'CV_READY' });
+        const opencvUrl = msg.payload?.opencvUrl ?? new URL('/opencv.js', self.location.origin).href;
+        const res = await fetch(opencvUrl);
+        if (!res.ok) throw new Error(`opencv.js fetch failed: ${res.status} ${res.statusText}`);
+        const code = await res.text();
+        // UMD ends with }\n}(this, function () { ... }; run in worker global so root = self.
+        const OPENCV_ROOT = '__opencv_root__';
+        const patched = code.replace(/\}\s*\}\s*\(\s*this\s*,/, '}}(' + OPENCV_ROOT + ',');
+        new Function(OPENCV_ROOT, patched)(self);
+
+        // OpenCV build_js.py bundles WASM into JS by default (no .wasm file). Builds can expose:
+        // 1) factory function cv(...) (MODULARIZE), 2) Promise cv, 3) global object cv (non-modular).
+        const maybeCv: any = (self as any).cv;
+        let cvObj: any;
+
+        if (typeof maybeCv === 'function') {
+          cvObj = await maybeCv({});
+        } else if (maybeCv && typeof maybeCv.then === 'function') {
+          cvObj = await maybeCv;
+        } else if (maybeCv && typeof maybeCv === 'object') {
+          cvObj = maybeCv;
         } else {
-            cv['onRuntimeInitialized'] = () => {
-                isCvReady = true;
-                postMessage({ type: 'CV_READY' });
-            };
+          postMessage({ type: 'ERROR', payload: 'OpenCV did not expose cv (factory/promise/object). Is public/opencv.js the full build?' });
+          return;
         }
+
+        await waitForOpenCvReady(cvObj);
+
+        const hasMat = (o: any) => o != null && typeof o.Mat === 'function';
+        const cvNamespace = hasMat(cvObj) ? cvObj : cvObj?.cv;
+        if (!cvNamespace || !hasMat(cvNamespace)) {
+          postMessage({ type: 'ERROR', payload: 'OpenCV Module has no Mat constructor. Build may be incomplete or wrong file.' });
+          return;
+        }
+        // Merge Module (matFromImageData etc.) and cv namespace (Mat, cvtColor etc.) into one object so module-scope `cv` has everything.
+        const merged = Object.create(null) as any;
+        Object.assign(merged, cvObj);
+        Object.assign(merged, cvNamespace);
+
+        cv = merged;
+        (self as any).cv = merged;
+        isCvReady = true;
+        // Uncomment to inspect what cv points to (handle in App: if (e.data.type === 'DEBUG') console.log(e.data.payload))
+        // postMessage({ type: 'DEBUG', payload: { cvType: typeof cv, hasMat: !!cv?.Mat, matType: typeof cv?.Mat, hasMatFromImageData: !!cv?.matFromImageData, keys: cv ? Object.keys(cv).slice(0, 40) : null } });
+        postMessage({ type: 'CV_READY' });
     } catch (err) {
         console.error('Failed to load OpenCV', err);
-        postMessage({ type: 'ERROR', payload: 'Failed to load OpenCV. Make sure opencv.js is in public/ directory.' });
+        const message = err instanceof Error ? err.message : String(err);
+        postMessage({ type: 'ERROR', payload: message || 'Failed to load OpenCV. Ensure opencv.js is in public/.' });
     }
   } 
-  else if (msg.type === 'PROCESS_IMAGE' && isCvReady) {
+  else if (msg.type === 'PROCESS_IMAGE') {
+    console.log('[CV] PROCESS_IMAGE received');
+    if (!cv || typeof cv.Mat !== 'function') {
+      postMessage({ type: 'ERROR', payload: 'OpenCV not ready: cv.Mat missing' });
+      return;
+    }
     try {
       const result = processImage(msg.payload);
       postMessage({ type: 'ANALYSIS_COMPLETE', payload: result });
@@ -66,32 +140,100 @@ self.onmessage = async (e: MessageEvent<WorkerMessage>) => {
   }
 };
 
+/** Use our module-scope cv only. OpenCV helpers (matFromImageData, matFromArray, Mat.zeros/ones) may capture a different cv. */
+function matFromImageDataSafe(imageData: ImageData) {
+  const mat = new cv.Mat(imageData.height, imageData.width, cv.CV_8UC4);
+  mat.data.set(imageData.data);
+  return mat;
+}
+
+function matFromArrayF32Safe(rows: number, cols: number, type: number, data: number[]) {
+  const mat = new cv.Mat(rows, cols, type);
+  mat.data32F.set(new Float32Array(data));
+  return mat;
+}
+
+function matZerosSafe(rows: number, cols: number, type: number) {
+  const mat = new cv.Mat(rows, cols, type);
+  mat.setTo(new cv.Scalar(0));
+  return mat;
+}
+
+function matOnesU8Safe(rows: number, cols: number) {
+  const mat = new cv.Mat(rows, cols, cv.CV_8U);
+  mat.setTo(new cv.Scalar(1));
+  return mat;
+}
+
 function processImage(input: { imageData: ImageData, width: number, height: number, rulerLengthMm: number, mode: AnalysisMode }) {
   const { imageData, rulerLengthMm, mode } = input;
   const scaleCorrection = rulerLengthMm / 100.0;
-  
-  let src = cv.matFromImageData(imageData);
+  console.log('[CV] processImage start', { mode, width: imageData.width, height: imageData.height });
+
+  postMessage({ type: 'DEBUG', payload: { matType: typeof cv?.Mat, cv8uc4: cv?.CV_8UC4, matFromImageDataType: typeof cv?.matFromImageData } });
+
+  let src = matFromImageDataSafe(imageData);
   let gray = new cv.Mat();
   cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-  
+  console.log('[CV] src/gray created');
+
   // 1. Detect ArUco Markers
   // Try ArUco first, fallback to square detection if not available
   let srcPts: any;
   let foundMarkers = false;
-  
+
   try {
-    // Check if ArUco is available
-    if (cv.aruco && cv.aruco.getPredefinedDictionary) {
-      const arucoDict = cv.aruco.getPredefinedDictionary(cv.aruco.DICT_4X4_50);
-      const params = new cv.aruco.DetectorParameters();
-      params.cornerRefinementMethod = cv.aruco.CORNER_REFINE_SUBPIX;
-      
+    // ArUco in OpenCV.js is under objdetect (cv.getPredefinedDictionary, cv.aruco_ArucoDetector) or cv.aruco namespace
+    const getDictFn = (cv.aruco && typeof cv.aruco.getPredefinedDictionary === 'function')
+      ? cv.aruco.getPredefinedDictionary.bind(cv.aruco)
+      : typeof cv.getPredefinedDictionary === 'function'
+        ? cv.getPredefinedDictionary.bind(cv)
+        : null;
+    const DICT_4X4_50 = (cv.aruco && cv.aruco.DICT_4X4_50 != null) ? cv.aruco.DICT_4X4_50 : (cv as any).DICT_4X4_50;
+    const DetectorParamsCtor = (cv.aruco && cv.aruco.DetectorParameters) || (cv as any).aruco_DetectorParameters;
+    const CORNER_REFINE_SUBPIX = (cv.aruco && cv.aruco.CORNER_REFINE_SUBPIX != null) ? cv.aruco.CORNER_REFINE_SUBPIX : (cv as any).CORNER_REFINE_SUBPIX;
+    const ArucoDetectorCtor = (cv.aruco && cv.aruco.ArucoDetector) || (cv as any).aruco_ArucoDetector || (cv as any).ArucoDetector;
+
+    const arucoAvailable = !!(getDictFn && DICT_4X4_50 != null && (DetectorParamsCtor || ArucoDetectorCtor));
+    if (!arucoAvailable) {
+      console.log('[CV] ArUco not available', {
+        hasGetPredefinedDictionary: !!getDictFn,
+        hasDictEnum: DICT_4X4_50 != null,
+        hasDetectorParams: !!DetectorParamsCtor,
+        hasArucoDetector: !!ArucoDetectorCtor,
+        hasCvAruco: !!cv.aruco
+      }, '→ using fallback');
+    }
+    if (arucoAvailable && getDictFn) {
+      console.log('[CV] ArUco detection start');
+      const arucoDict = getDictFn(DICT_4X4_50);
+      const params = DetectorParamsCtor ? new DetectorParamsCtor() : null;
+      if (params && CORNER_REFINE_SUBPIX != null && typeof params.cornerRefinementMethod !== 'undefined') params.cornerRefinementMethod = CORNER_REFINE_SUBPIX;
+
       const corners = new cv.MatVector();
       const ids = new cv.Mat();
       const rejected = new cv.Mat();
-      
-      cv.aruco.detectMarkers(gray, arucoDict, corners, ids, params, rejected);
-      
+
+      if (ArucoDetectorCtor && params) {
+        const detector = new ArucoDetectorCtor(arucoDict, params);
+        detector.detectMarkers(gray, corners, ids, rejected);
+      } else if (cv.aruco && typeof cv.aruco.detectMarkers === 'function') {
+        cv.aruco.detectMarkers(gray, arucoDict, corners, ids, params, rejected);
+      } else {
+        throw new Error('No detectMarkers API available');
+      }
+      const numRejected = rejected && typeof rejected.size === 'function' ? rejected.size() : (rejected.rows ?? 0);
+      const detectedIds: number[] = [];
+      for (let i = 0; i < ids.rows; i++) {
+        detectedIds.push(ids.intPtr(i, 0)[0]);
+      }
+      console.log('[CV] ArUco detectMarkers result:', {
+        numMarkers: corners.size(),
+        numIds: ids.rows,
+        numRejected,
+        detectedIds: detectedIds.length ? detectedIds : undefined
+      });
+
       if (ids.rows >= 4) {
         // Organize by ID
         const foundMap: {[key: number]: any} = {};
@@ -101,37 +243,55 @@ function processImage(input: { imageData: ImageData, width: number, height: numb
             foundMap[id] = corners.get(i);
           }
         }
-        
+        const foundIds = Object.keys(foundMap).map(Number).sort((a, b) => a - b);
+        console.log('[CV] ArUco markers with id 0–3:', { foundIds, count: foundIds.length });
+
         if (Object.keys(foundMap).length >= 4) {
-          // Extract outer corners from ArUco markers
-          // Each corner is a 4x1 Mat with 4 points (corners of the marker)
-          const getOuterCorner = (marker: any, cornerIdx: number) => {
-            // cornerIdx: 0=TL, 1=TR, 2=BR, 3=BL of the marker
+          const getCorner = (marker: any, cornerIdx: number) => {
             return [marker.data32F[cornerIdx * 2], marker.data32F[cornerIdx * 2 + 1]];
           };
-          
-          srcPts = cv.matFromArray(4, 1, cv.CV_32FC2, [
-            ...getOuterCorner(foundMap[0], 0), // ID 0 = TL marker, use its TL corner
-            ...getOuterCorner(foundMap[1], 1), // ID 1 = TR marker, use its TR corner
-            ...getOuterCorner(foundMap[2], 2), // ID 2 = BR marker, use its BR corner
-            ...getOuterCorner(foundMap[3], 3)  // ID 3 = BL marker, use its BL corner
-          ]);
-          foundMarkers = true;
-          
-          corners.delete(); ids.delete(); rejected.delete(); params.delete();
+          const pt0 = getCorner(foundMap[0], 2);
+          const pt1 = getCorner(foundMap[1], 3);
+          const pt2 = getCorner(foundMap[2], 0);
+          const pt3 = getCorner(foundMap[3], 1);
+          const xs = [pt0[0], pt1[0], pt2[0], pt3[0]];
+          const ys = [pt0[1], pt1[1], pt2[1], pt3[1]];
+          const minX = Math.min(...xs), maxX = Math.max(...xs);
+          const minY = Math.min(...ys), maxY = Math.max(...ys);
+          const boxW = maxX - minX, boxH = maxY - minY;
+          const aspect = boxW / (boxH || 1);
+          const expectedAspect = 180 / 250;
+          const minFraction = 0.15;
+          const validSize = boxW >= imageData.width * minFraction && boxH >= imageData.height * minFraction;
+          const validAspect = aspect >= expectedAspect * 0.6 && aspect <= expectedAspect * 1.6;
+          if (validSize && validAspect) {
+            srcPts = matFromArrayF32Safe(4, 1, cv.CV_32FC2, [...pt0, ...pt1, ...pt2, ...pt3]);
+            foundMarkers = true;
+            console.log('[CV] ArUco: quad accepted', { boxW, boxH, aspect, corners: { tl: pt0, tr: pt1, br: pt2, bl: pt3 } });
+          } else {
+            console.log('[CV] ArUco: quad rejected (size or aspect)', { boxW, boxH, aspect, validSize, validAspect });
+          }
+          corners.delete(); ids.delete(); rejected.delete(); if (params) params.delete();
+        } else {
+          console.log('[CV] ArUco: need ids 0,1,2,3, got', foundIds, '→ using fallback');
+          corners.delete(); ids.delete(); rejected.delete(); if (params) params.delete();
         }
+      } else {
+        console.log('[CV] ArUco: fewer than 4 markers detected → using fallback');
       }
     }
   } catch (e) {
-    console.warn('ArUco detection failed, using fallback:', e);
+    console.warn('[CV] ArUco detection failed, using fallback:', e);
   }
-  
+
+  if (!foundMarkers) console.log('[CV] Fallback: square marker detection');
+
   // Fallback: Square marker detection (original method)
   if (!foundMarkers) {
     let binary = new cv.Mat();
     cv.adaptiveThreshold(gray, binary, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 11, 2);
     
-    let kernel = cv.Mat.ones(5, 5, cv.CV_8U);
+    let kernel = matOnesU8Safe(5, 5);
     cv.morphologyEx(binary, binary, cv.MORPH_CLOSE, kernel);
     kernel.delete();
     
@@ -177,7 +337,7 @@ function processImage(input: { imageData: ImageData, width: number, height: numb
     const bottom = markers.slice(2, 4).sort((a, b) => a.x - b.x);
     const corners = [top[0], top[1], bottom[1], bottom[0]];
     
-    srcPts = cv.matFromArray(4, 1, cv.CV_32FC2, [
+    srcPts = matFromArrayF32Safe(4, 1, cv.CV_32FC2, [
       corners[0].x, corners[0].y,
       corners[1].x, corners[1].y,
       corners[2].x, corners[2].y,
@@ -185,17 +345,20 @@ function processImage(input: { imageData: ImageData, width: number, height: numb
     ]);
     
     binary.delete(); contours.delete(); hierarchy.delete();
+    console.log('[CV] Fallback: markers found, srcPts set');
   }
-  
+
+  console.log('[CV] Perspective warp');
   // 2. Perspective Warp
   const dstW = CALIB_CONFIG.REAL_WIDTH_MM * CALIB_CONFIG.SCALE;
   const dstH = CALIB_CONFIG.REAL_HEIGHT_MM * CALIB_CONFIG.SCALE;
-  const dstPts = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, dstW, 0, dstW, dstH, 0, dstH]);
+  const dstPts = matFromArrayF32Safe(4, 1, cv.CV_32FC2, [0, 0, dstW, 0, dstW, dstH, 0, dstH]);
   
   const M = cv.getPerspectiveTransform(srcPts, dstPts);
   const warped = new cv.Mat();
   cv.warpPerspective(src, warped, M, new cv.Size(dstW, dstH));
-  
+  console.log('[CV] Warp done, color calibration (gray ramp)');
+
   // 3. Color Calibration (Grayscale Ramp)
   const patchY = CALIB_CONFIG.GRAY_PATCH_Y_MM * CALIB_CONFIG.SCALE;
   const radius = Math.floor(1.5 * CALIB_CONFIG.SCALE);
@@ -215,9 +378,11 @@ function processImage(input: { imageData: ImageData, width: number, height: numb
     b: buildLut(observedRGBs.map(p => p[2]), CALIB_CONFIG.EXPECTED_LEVELS)
   };
   
+  console.log('[CV] LUTs built');
   // 4. CMYK White Balance (for bean mode)
   let wbFactors = { r: 1.0, g: 1.0, b: 1.0 };
   if (mode === 'bean') {
+    console.log('[CV] Bean mode: CMYK WB');
     const cmykY = CALIB_CONFIG.CMYK_PATCH_Y_MM * CALIB_CONFIG.SCALE;
     const cmykRadius = Math.floor(3 * CALIB_CONFIG.SCALE);
     const cmykObserved: number[][] = [];
@@ -248,60 +413,66 @@ function processImage(input: { imageData: ImageData, width: number, height: numb
   const stageY = (CALIB_CONFIG.STAGE_CENTER_Y_MM - CALIB_CONFIG.STAGE_RADIUS_MM) * CALIB_CONFIG.SCALE;
   const stageDim = CALIB_CONFIG.STAGE_RADIUS_MM * 2 * CALIB_CONFIG.SCALE;
   const stageRoi = warped.roi(new cv.Rect(stageX, stageY, stageDim, stageDim));
-  
+  console.log('[CV] Stage ROI extracted, calling', mode === 'grind' ? 'analyzeGrind' : 'analyzeBeans');
+
   let results: any;
   if (mode === 'grind') {
     results = analyzeGrind(stageRoi, luts, scaleCorrection);
   } else {
     results = analyzeBeans(stageRoi, luts, wbFactors, scaleCorrection);
   }
-  
+
+  console.log('[CV] Analysis done, cleanup');
   // Cleanup
   src.delete(); gray.delete(); srcPts.delete(); dstPts.delete();
   M.delete(); warped.delete(); stageRoi.delete();
-  
+
   return results;
 }
 
 function analyzeGrind(stageRoi: any, luts: any, scaleCorrection: number) {
+  console.log('[CV] analyzeGrind start');
   const gray = new cv.Mat();
   cv.cvtColor(stageRoi, gray, cv.COLOR_RGBA2GRAY);
-  
-  // DoG filtering for fine particles
+
   const grayDn = new cv.Mat();
-  cv.fastNlMeansDenoising(gray, grayDn, 10, 7, 21);
-  
+  cv.bilateralFilter(gray, grayDn, 9, 75, 75);
+  console.log('[CV] analyzeGrind: bilateralFilter done');
+
   const bg = new cv.Mat();
   cv.GaussianBlur(grayDn, bg, new cv.Size(0, 0), 25);
   const hp = new cv.Mat();
   cv.subtract(bg, grayDn, hp);
-  
+
   const g1 = new cv.Mat(), g2 = new cv.Mat();
   cv.GaussianBlur(hp, g1, new cv.Size(0, 0), 0.8);
   cv.GaussianBlur(hp, g2, new cv.Size(0, 0), 1.6);
   const dog = new cv.Mat();
   cv.subtract(g1, g2, dog);
   cv.normalize(dog, dog, 0, 255, cv.NORM_MINMAX);
-  
+
   const bw = new cv.Mat();
-  cv.threshold(dog, bw, 20, 255, cv.THRESH_BINARY);
-  
-  // Circular mask
-  const mask = new cv.Mat.zeros(bw.rows, bw.cols, cv.CV_8UC1);
+  cv.threshold(dog, bw, 42, 255, cv.THRESH_BINARY);
+
+  const mask = matZerosSafe(bw.rows, bw.cols, cv.CV_8UC1);
   const r = Math.floor(Math.min(bw.rows, bw.cols) * 0.48);
   cv.circle(mask, new cv.Point(bw.cols / 2, bw.rows / 2), r, new cv.Scalar(255), -1);
   cv.bitwise_and(bw, bw, bw, mask);
-  
-  // Connected components
+
+  console.log('[CV] analyzeGrind: connectedComponentsWithStats');
   const labels = new cv.Mat();
   const stats = new cv.Mat();
   const centroids = new cv.Mat();
   const num = cv.connectedComponentsWithStats(bw, labels, stats, centroids, 8);
-  
+
+  const minAreaPx = 18;
+  const maxAreaPx = (bw.rows * bw.cols) * 0.12;
+  console.log('[CV] analyzeGrind: components', num, 'filter area', minAreaPx, '-', Math.round(maxAreaPx), 'px');
+
   const particles: any[] = [];
   for (let i = 1; i < num; i++) {
     const area = stats.intPtr(i, cv.CC_STAT_AREA)[0];
-    if (area < 1) continue;
+    if (area < minAreaPx || area > maxAreaPx) continue;
     
     const cx = centroids.doublePtr(i, 0)[0];
     const cy = centroids.doublePtr(i, 1)[0];
@@ -310,7 +481,7 @@ function analyzeGrind(stageRoi: any, luts: any, scaleCorrection: number) {
     const majorMm = (Math.sqrt(area / Math.PI) * 2) / CALIB_CONFIG.SCALE * scaleCorrection;
     
     // Color (sample small region)
-    const sampleMask = new cv.Mat.zeros(stageRoi.rows, stageRoi.cols, cv.CV_8UC1);
+    const sampleMask = matZerosSafe(stageRoi.rows, stageRoi.cols, cv.CV_8UC1);
     cv.circle(sampleMask, new cv.Point(cx, cy), 2, new cv.Scalar(255), -1);
     const meanColor = cv.mean(stageRoi, sampleMask);
     
@@ -328,44 +499,63 @@ function analyzeGrind(stageRoi: any, luts: any, scaleCorrection: number) {
     
     sampleMask.delete();
   }
-  
+
+  console.log('[CV] analyzeGrind done, particles:', particles.length);
+
+  const visContours = new cv.MatVector();
+  const visHierarchy = new cv.Mat();
+  cv.findContours(bw, visContours, visHierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+  const vis = stageRoi.clone();
+  const green = new cv.Scalar(0, 255, 0);
+  for (let i = 0; i < visContours.size(); i++) {
+    const cnt = visContours.get(i);
+    const a = cv.contourArea(cnt);
+    if (a >= minAreaPx && a <= maxAreaPx) cv.drawContours(vis, visContours, i, green, 2);
+  }
+  const stageImageData = { data: Array.from(vis.data), width: vis.cols, height: vis.rows };
+  vis.delete(); visContours.delete(); visHierarchy.delete();
+
   gray.delete(); grayDn.delete(); bg.delete(); hp.delete(); g1.delete(); g2.delete();
   dog.delete(); bw.delete(); mask.delete(); labels.delete(); stats.delete(); centroids.delete();
-  
-  return { mode: 'grind', particles };
+
+  return { mode: 'grind', particles, stageImageData };
 }
 
 function analyzeBeans(stageRoi: any, luts: any, wbFactors: any, scaleCorrection: number) {
+  console.log('[CV] analyzeBeans start');
   const gray = new cv.Mat();
   cv.cvtColor(stageRoi, gray, cv.COLOR_RGBA2GRAY);
-  
+
   cv.GaussianBlur(gray, gray, new cv.Size(5, 5), 0);
   const bg = new cv.Mat();
   cv.GaussianBlur(gray, bg, new cv.Size(0, 0), 30);
   const diff = new cv.Mat();
   cv.subtract(bg, gray, diff);
   cv.normalize(diff, diff, 0, 255, cv.NORM_MINMAX);
-  
+
   const bw = new cv.Mat();
   cv.threshold(diff, bw, 15, 255, cv.THRESH_BINARY);
-  
+
   const kernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(5, 5));
   cv.morphologyEx(bw, bw, cv.MORPH_CLOSE, kernel, new cv.Point(-1, -1), 2);
   cv.morphologyEx(bw, bw, cv.MORPH_OPEN, kernel, new cv.Point(-1, -1), 1);
-  
-  const mask = new cv.Mat.zeros(bw.rows, bw.cols, cv.CV_8UC1);
+
+  const mask = matZerosSafe(bw.rows, bw.cols, cv.CV_8UC1);
   const r = Math.floor(Math.min(bw.rows, bw.cols) * 0.48);
   cv.circle(mask, new cv.Point(bw.cols / 2, bw.rows / 2), r, new cv.Scalar(255), -1);
   cv.bitwise_and(bw, bw, bw, mask);
-  
+
+  console.log('[CV] analyzeBeans: findContours');
   const contours = new cv.MatVector();
   const hierarchy = new cv.Mat();
   cv.findContours(bw, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
-  
+  const nContours = contours.size();
+  console.log('[CV] analyzeBeans: contours', nContours, 'bean loop start');
+
   const beans: any[] = [];
   const minArea = 50;
-  
-  for (let i = 0; i < contours.size(); i++) {
+
+  for (let i = 0; i < nContours; i++) {
     const cnt = contours.get(i);
     const area = cv.contourArea(cnt);
     if (area < minArea) continue;
@@ -377,7 +567,7 @@ function analyzeBeans(stageRoi: any, luts: any, wbFactors: any, scaleCorrection:
       const majorMm = Math.max(MA, ma) / CALIB_CONFIG.SCALE * scaleCorrection;
       const minorMm = Math.min(MA, ma) / CALIB_CONFIG.SCALE * scaleCorrection;
       
-      const beanMask = new cv.Mat.zeros(stageRoi.rows, stageRoi.cols, cv.CV_8UC1);
+      const beanMask = matZerosSafe(stageRoi.rows, stageRoi.cols, cv.CV_8UC1);
       cv.drawContours(beanMask, contours, i, new cv.Scalar(255), -1);
       const meanColor = cv.mean(stageRoi, beanMask);
       
@@ -396,11 +586,22 @@ function analyzeBeans(stageRoi: any, luts: any, wbFactors: any, scaleCorrection:
       beanMask.delete();
     }
   }
-  
+
+  console.log('[CV] analyzeBeans done, beans:', beans.length);
+
+  const vis = stageRoi.clone();
+  const green = new cv.Scalar(0, 255, 0);
+  for (let i = 0; i < nContours; i++) {
+    const cnt = contours.get(i);
+    if (cv.contourArea(cnt) >= minArea && cnt.rows >= 5) cv.drawContours(vis, contours, i, green, 2);
+  }
+  const stageImageData = { data: Array.from(vis.data), width: vis.cols, height: vis.rows };
+  vis.delete();
+
   gray.delete(); bg.delete(); diff.delete(); bw.delete(); kernel.delete();
   mask.delete(); contours.delete(); hierarchy.delete();
-  
-  return { mode: 'bean', beans };
+
+  return { mode: 'bean', beans, stageImageData };
 }
 
 function buildLut(observed: number[], expected: number[]): Uint8Array {

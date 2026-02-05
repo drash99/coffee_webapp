@@ -52,7 +52,7 @@ CONTRIB_MODULES="$(realpath ../opencv_contrib/modules)"
 python3 platforms/js/build_js.py build_wasm \
   --build_wasm \
   --cmake_option="-DOPENCV_EXTRA_MODULES_PATH=${CONTRIB_MODULES}" \
-  --cmake_option="-DBUILD_LIST=core,imgproc,calib3d,photo,aruco,js" \
+  --cmake_option="-DBUILD_LIST=core,imgproc,calib3d,photo,objdetect,js" \
   --cmake_option="-DBUILD_opencv_js=ON" \
   --cmake_option="-DBUILD_SHARED_LIBS=OFF" \
   --cmake_option="-DBUILD_TESTS=OFF" \
