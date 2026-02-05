@@ -29,7 +29,7 @@ const CALIB_CONFIG = {
   STAGE_CENTER_X_MM: 90,
   STAGE_CENTER_Y_MM: 115,
   STAGE_RADIUS_MM: 50,
-  SCALE: 10  // Higher resolution for better detection
+  SCALE: 12  // Higher resolution for better detection
 };
 
 let isCvReady = false;
@@ -191,6 +191,7 @@ function processImage(input: { imageData: ImageData, width: number, height: numb
         : null;
     const DICT_4X4_50 = (cv.aruco && cv.aruco.DICT_4X4_50 != null) ? cv.aruco.DICT_4X4_50 : (cv as any).DICT_4X4_50;
     const DetectorParamsCtor = (cv.aruco && cv.aruco.DetectorParameters) || (cv as any).aruco_DetectorParameters;
+    const RefineParamsCtor = (cv.aruco && cv.aruco.RefineParameters) || (cv as any).aruco_RefineParameters;
     const CORNER_REFINE_SUBPIX = (cv.aruco && cv.aruco.CORNER_REFINE_SUBPIX != null) ? cv.aruco.CORNER_REFINE_SUBPIX : (cv as any).CORNER_REFINE_SUBPIX;
     const ArucoDetectorCtor = (cv.aruco && cv.aruco.ArucoDetector) || (cv as any).aruco_ArucoDetector || (cv as any).ArucoDetector;
 
@@ -208,21 +209,25 @@ function processImage(input: { imageData: ImageData, width: number, height: numb
       console.log('[CV] ArUco detection start');
       const arucoDict = getDictFn(DICT_4X4_50);
       const params = DetectorParamsCtor ? new DetectorParamsCtor() : null;
+      // RefineParameters(minRepDistance, errorCorrectionRate, checkAllOrders) - defaults 10, 3, true
+      const refineParams = RefineParamsCtor ? new RefineParamsCtor(10, 3, true) : null;
       if (params && CORNER_REFINE_SUBPIX != null && typeof params.cornerRefinementMethod !== 'undefined') params.cornerRefinementMethod = CORNER_REFINE_SUBPIX;
 
       const corners = new cv.MatVector();
       const ids = new cv.Mat();
-      const rejected = new cv.Mat();
+      // rejectedImgPoints is OutputArrayOfArrays (MatVector), not Mat
+      const rejected = new cv.MatVector();
 
-      if (ArucoDetectorCtor && params) {
-        const detector = new ArucoDetectorCtor(arucoDict, params);
+      if (ArucoDetectorCtor && params !== null && refineParams !== null) {
+        // ArucoDetector(dictionary, detectorParams, refineParams) - 3 args required in JS bindings
+        const detector = new ArucoDetectorCtor(arucoDict, params, refineParams);
         detector.detectMarkers(gray, corners, ids, rejected);
       } else if (cv.aruco && typeof cv.aruco.detectMarkers === 'function') {
         cv.aruco.detectMarkers(gray, arucoDict, corners, ids, params, rejected);
       } else {
         throw new Error('No detectMarkers API available');
       }
-      const numRejected = rejected && typeof rejected.size === 'function' ? rejected.size() : (rejected.rows ?? 0);
+      const numRejected = rejected.size();
       const detectedIds: number[] = [];
       for (let i = 0; i < ids.rows; i++) {
         detectedIds.push(ids.intPtr(i, 0)[0]);
@@ -247,13 +252,15 @@ function processImage(input: { imageData: ImageData, width: number, height: numb
         console.log('[CV] ArUco markers with id 0–3:', { foundIds, count: foundIds.length });
 
         if (Object.keys(foundMap).length >= 4) {
+          // Use outer corners of each marker so the warped image extends to the marker edges (includes markers).
+          // ArUco corner order: 0=TL, 1=TR, 2=BR, 3=BL. Sheet: ID 0=TL, 1=TR, 2=BR, 3=BL.
           const getCorner = (marker: any, cornerIdx: number) => {
             return [marker.data32F[cornerIdx * 2], marker.data32F[cornerIdx * 2 + 1]];
           };
-          const pt0 = getCorner(foundMap[0], 2);
-          const pt1 = getCorner(foundMap[1], 3);
-          const pt2 = getCorner(foundMap[2], 0);
-          const pt3 = getCorner(foundMap[3], 1);
+          const pt0 = getCorner(foundMap[0], 0); // sheet TL = marker 0 TL
+          const pt1 = getCorner(foundMap[1], 1); // sheet TR = marker 1 TR
+          const pt2 = getCorner(foundMap[2], 2); // sheet BR = marker 2 BR
+          const pt3 = getCorner(foundMap[3], 3); // sheet BL = marker 3 BL
           const xs = [pt0[0], pt1[0], pt2[0], pt3[0]];
           const ys = [pt0[1], pt1[1], pt2[1], pt3[1]];
           const minX = Math.min(...xs), maxX = Math.max(...xs);
@@ -271,10 +278,10 @@ function processImage(input: { imageData: ImageData, width: number, height: numb
           } else {
             console.log('[CV] ArUco: quad rejected (size or aspect)', { boxW, boxH, aspect, validSize, validAspect });
           }
-          corners.delete(); ids.delete(); rejected.delete(); if (params) params.delete();
+          corners.delete(); ids.delete(); rejected.delete(); if (params) params.delete(); if (refineParams && typeof refineParams.delete === 'function') refineParams.delete();
         } else {
           console.log('[CV] ArUco: need ids 0,1,2,3, got', foundIds, '→ using fallback');
-          corners.delete(); ids.delete(); rejected.delete(); if (params) params.delete();
+          corners.delete(); ids.delete(); rejected.delete(); if (params) params.delete(); if (refineParams && typeof refineParams.delete === 'function') refineParams.delete();
         }
       } else {
         console.log('[CV] ArUco: fewer than 4 markers detected → using fallback');
@@ -422,6 +429,28 @@ function processImage(input: { imageData: ImageData, width: number, height: numb
     results = analyzeBeans(stageRoi, luts, wbFactors, scaleCorrection);
   }
 
+  // Debug: warped image with LUT/gamma applied, then overlay circles for gray and CMYK patches
+  const warpedVis = warped.clone();
+  applyLutToMatRGBA(warpedVis, luts);
+  const green = new cv.Scalar(0, 255, 0, 255);   // BGR: gray ramp patches
+  const magenta = new cv.Scalar(255, 0, 255, 255); // BGR: CMYK patches
+  for (const xMm of CALIB_CONFIG.GRAY_PATCH_XS_MM) {
+    const patchX = Math.round(xMm * CALIB_CONFIG.SCALE);
+    const patchY = Math.round(CALIB_CONFIG.GRAY_PATCH_Y_MM * CALIB_CONFIG.SCALE);
+    cv.circle(warpedVis, new cv.Point(patchX, patchY), radius, green, 2);
+  }
+  const cmykY = Math.round(CALIB_CONFIG.CMYK_PATCH_Y_MM * CALIB_CONFIG.SCALE);
+  const cmykRadius = Math.floor(3 * CALIB_CONFIG.SCALE);
+  for (const xMm of CALIB_CONFIG.CMYK_PATCH_XS_MM) {
+    const patchX = Math.round(xMm * CALIB_CONFIG.SCALE);
+    cv.circle(warpedVis, new cv.Point(patchX, cmykY), cmykRadius, magenta, 2);
+  }
+  results.warpedImageData = { data: Array.from(warpedVis.data), width: warpedVis.cols, height: warpedVis.rows };
+  warpedVis.delete();
+
+  // LUT curves for debugging (input 0..255 -> output value per channel)
+  results.lutCurves = { r: Array.from(luts.r), g: Array.from(luts.g), b: Array.from(luts.b) };
+
   console.log('[CV] Analysis done, cleanup');
   // Cleanup
   src.delete(); gray.delete(); srcPts.delete(); dstPts.delete();
@@ -465,7 +494,7 @@ function analyzeGrind(stageRoi: any, luts: any, scaleCorrection: number) {
   const centroids = new cv.Mat();
   const num = cv.connectedComponentsWithStats(bw, labels, stats, centroids, 8);
 
-  const minAreaPx = 18;
+  const minAreaPx = 1;
   const maxAreaPx = (bw.rows * bw.cols) * 0.12;
   console.log('[CV] analyzeGrind: components', num, 'filter area', minAreaPx, '-', Math.round(maxAreaPx), 'px');
 
@@ -630,6 +659,17 @@ function buildLut(observed: number[], expected: number[]): Uint8Array {
 function applyLut(val: number, lut: Uint8Array): number {
   const idx = Math.max(0, Math.min(255, Math.round(val)));
   return lut[idx];
+}
+
+/** Apply R/G/B LUTs to an RGBA Mat in place (channel order R,G,B,A). Used for debug warped image. */
+function applyLutToMatRGBA(mat: any, luts: { r: Uint8Array; g: Uint8Array; b: Uint8Array }) {
+  const data = mat.data;
+  const len = mat.rows * mat.cols * 4;
+  for (let i = 0; i < len; i += 4) {
+    data[i] = luts.r[data[i]];
+    data[i + 1] = luts.g[data[i + 1]];
+    data[i + 2] = luts.b[data[i + 2]];
+  }
 }
 
 export {};

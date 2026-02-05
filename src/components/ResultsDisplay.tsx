@@ -1,31 +1,38 @@
 import { useMemo, useState, useEffect } from 'react';
-import { Scatter, Bar } from 'react-chartjs-2';
+import { Scatter, Bar, Line } from 'react-chartjs-2';
 
 export interface ResultsDisplayProps {
   mode: 'bean' | 'grind';
   data: any[];
   stageImageData?: { data: number[]; width: number; height: number };
+  warpedImageData?: { data: number[]; width: number; height: number };
+  lutCurves?: { r: number[]; g: number[]; b: number[] };
   loading?: boolean;
 }
 
-export function ResultsDisplay({ mode, data, stageImageData, loading }: ResultsDisplayProps) {
-  const [stageImageUrl, setStageImageUrl] = useState<string | null>(null);
-
+function useImageDataUrl(imageData: { data: number[]; width: number; height: number } | undefined): string | null {
+  const [url, setUrl] = useState<string | null>(null);
   useEffect(() => {
-    if (!stageImageData?.data?.length || !stageImageData.width || !stageImageData.height) {
-      setStageImageUrl(null);
+    if (!imageData?.data?.length || !imageData.width || !imageData.height) {
+      setUrl(null);
       return;
     }
     const canvas = document.createElement('canvas');
-    canvas.width = stageImageData.width;
-    canvas.height = stageImageData.height;
+    canvas.width = imageData.width;
+    canvas.height = imageData.height;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-    const imageData = new ImageData(new Uint8ClampedArray(stageImageData.data), stageImageData.width, stageImageData.height);
-    ctx.putImageData(imageData, 0, 0);
-    setStageImageUrl(canvas.toDataURL('image/png'));
-    return () => setStageImageUrl(null);
-  }, [stageImageData]);
+    const idata = new ImageData(new Uint8ClampedArray(imageData.data), imageData.width, imageData.height);
+    ctx.putImageData(idata, 0, 0);
+    setUrl(canvas.toDataURL('image/png'));
+    return () => setUrl(null);
+  }, [imageData]);
+  return url;
+}
+
+export function ResultsDisplay({ mode, data, stageImageData, warpedImageData, lutCurves, loading }: ResultsDisplayProps) {
+  const stageImageUrl = useImageDataUrl(stageImageData);
+  const warpedImageUrl = useImageDataUrl(warpedImageData);
   const stats = useMemo(() => {
     if (!data || data.length === 0) return null;
     
@@ -101,6 +108,39 @@ export function ResultsDisplay({ mode, data, stageImageData, loading }: ResultsD
       <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 space-y-4">
         <h2 className="text-lg font-semibold">Grind Analysis Results</h2>
 
+        {warpedImageUrl && (
+          <div className="rounded-lg overflow-hidden border border-gray-200 bg-gray-50">
+            <p className="text-xs text-gray-500 px-2 py-1">Debug: Warped (after ArUco / fallback)</p>
+            <p className="text-xs text-gray-500 px-2 pb-1">Green circles = gray ramp (gamma/LUT). Magenta = CMYK patches.</p>
+            <img src={warpedImageUrl} alt="Warped calibration sheet" className="w-full h-auto max-h-80 object-contain" />
+          </div>
+        )}
+        {lutCurves && (
+          <div className="rounded-lg border border-gray-200 bg-gray-50 p-2">
+            <p className="text-xs text-gray-500 px-2 py-1">LUT curves (input → output)</p>
+            <div className="h-48">
+              <Line
+                data={{
+                  labels: Array.from({ length: 256 }, (_, i) => i),
+                  datasets: [
+                    { label: 'R', data: lutCurves.r, borderColor: 'rgb(220,53,69)', backgroundColor: 'rgba(220,53,69,0.1)', fill: false, pointRadius: 0 },
+                    { label: 'G', data: lutCurves.g, borderColor: 'rgb(40,167,69)', backgroundColor: 'rgba(40,167,69,0.1)', fill: false, pointRadius: 0 },
+                    { label: 'B', data: lutCurves.b, borderColor: 'rgb(0,123,255)', backgroundColor: 'rgba(0,123,255,0.1)', fill: false, pointRadius: 0 }
+                  ]
+                }}
+                options={{
+                  responsive: true,
+                  maintainAspectRatio: false,
+                  scales: {
+                    x: { title: { display: true, text: 'Input' }, min: 0, max: 255 },
+                    y: { title: { display: true, text: 'Output' }, min: 0, max: 255 }
+                  },
+                  plugins: { legend: { display: true } }
+                }}
+              />
+            </div>
+          </div>
+        )}
         {stageImageUrl && (
           <div className="rounded-lg overflow-hidden border border-gray-200 bg-gray-50">
             <p className="text-xs text-gray-500 px-2 py-1">Stage (particles outlined)</p>
@@ -184,6 +224,39 @@ export function ResultsDisplay({ mode, data, stageImageData, loading }: ResultsD
       <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 space-y-4">
         <h2 className="text-lg font-semibold">Bean Analysis Results</h2>
 
+        {warpedImageUrl && (
+          <div className="rounded-lg overflow-hidden border border-gray-200 bg-gray-50">
+            <p className="text-xs text-gray-500 px-2 py-1">Debug: Warped (after ArUco / fallback)</p>
+            <p className="text-xs text-gray-500 px-2 pb-1">Green circles = gray ramp (gamma/LUT). Magenta = CMYK patches.</p>
+            <img src={warpedImageUrl} alt="Warped calibration sheet" className="w-full h-auto max-h-80 object-contain" />
+          </div>
+        )}
+        {lutCurves && (
+          <div className="rounded-lg border border-gray-200 bg-gray-50 p-2">
+            <p className="text-xs text-gray-500 px-2 py-1">LUT curves (input → output)</p>
+            <div className="h-48">
+              <Line
+                data={{
+                  labels: Array.from({ length: 256 }, (_, i) => i),
+                  datasets: [
+                    { label: 'R', data: lutCurves.r, borderColor: 'rgb(220,53,69)', backgroundColor: 'rgba(220,53,69,0.1)', fill: false, pointRadius: 0 },
+                    { label: 'G', data: lutCurves.g, borderColor: 'rgb(40,167,69)', backgroundColor: 'rgba(40,167,69,0.1)', fill: false, pointRadius: 0 },
+                    { label: 'B', data: lutCurves.b, borderColor: 'rgb(0,123,255)', backgroundColor: 'rgba(0,123,255,0.1)', fill: false, pointRadius: 0 }
+                  ]
+                }}
+                options={{
+                  responsive: true,
+                  maintainAspectRatio: false,
+                  scales: {
+                    x: { title: { display: true, text: 'Input' }, min: 0, max: 255 },
+                    y: { title: { display: true, text: 'Output' }, min: 0, max: 255 }
+                  },
+                  plugins: { legend: { display: true } }
+                }}
+              />
+            </div>
+          </div>
+        )}
         {stageImageUrl && (
           <div className="rounded-lg overflow-hidden border border-gray-200 bg-gray-50">
             <p className="text-xs text-gray-500 px-2 py-1">Stage (beans outlined)</p>

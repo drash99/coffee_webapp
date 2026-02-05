@@ -250,6 +250,8 @@ function App() {
             data={analysisResults?.mode === analysisMode ? 
               (analysisMode === 'grind' ? analysisResults.particles : analysisResults.beans) : []}
             {...(analysisResults?.stageImageData && { stageImageData: analysisResults.stageImageData })}
+            {...(analysisResults?.warpedImageData && { warpedImageData: analysisResults.warpedImageData })}
+            {...(analysisResults?.lutCurves && { lutCurves: analysisResults.lutCurves })}
             loading={processing}
           />
         )}
