@@ -53,7 +53,7 @@ CONTRIB_MODULES="$(realpath ../opencv_contrib/modules)"
 python3 platforms/js/build_js.py build_wasm \
   --build_wasm \
   --cmake_option="-DOPENCV_EXTRA_MODULES_PATH=${CONTRIB_MODULES}" \
-  --cmake_option="-DBUILD_LIST=core,imgproc,calib3d,photo,aruco" \
+  --cmake_option="-DBUILD_LIST=core,imgproc,calib3d,photo,aruco,js" \
   --cmake_option="-DBUILD_opencv_js=ON" \
   --cmake_option="-DBUILD_SHARED_LIBS=OFF" \
   --cmake_option="-DBUILD_TESTS=OFF" \
@@ -64,7 +64,10 @@ python3 platforms/js/build_js.py build_wasm \
   --cmake_option="-DWITH_TBB=OFF" \
   --cmake_option="-DWITH_OPENCL=OFF" \
   --cmake_option="-DWITH_OPENMP=OFF" \
-  --cmake_option="-DWITH_PTHREADS=OFF"
+  --cmake_option="-DWITH_PTHREADS=OFF" \
+  --cmake_option="-DCMAKE_CXX_STANDARD=17" \
+  --cmake_option="-DCMAKE_CXX_STANDARD_REQUIRED=ON" \
+  --cmake_option="-DCMAKE_CXX_EXTENSIONS=OFF" \
   --build_flags="-Oz -s WASM=1 -s ALLOW_MEMORY_GROWTH=1"
 
 

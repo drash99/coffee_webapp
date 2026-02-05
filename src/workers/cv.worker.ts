@@ -39,7 +39,7 @@ self.onmessage = async (e: MessageEvent<WorkerMessage>) => {
     try {
         // Load custom OpenCV.js with ArUco from public directory
         // @ts-ignore
-        importScripts('/opencv.js');
+        importScripts('./opencv.js');
         
         if (cv.getBuildInformation) {
              isCvReady = true;

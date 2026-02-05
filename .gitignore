@@ -156,8 +156,4 @@ test_*.png
 
 # OpenCV build artifacts
 opencv_build/
-opencv.js
-opencv.wasm
-public/opencv.js
-public/opencv.wasm
 
