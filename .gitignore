@@ -71,6 +71,7 @@ typings/
 
 # dotenv environment variables file
 .env
+.env.local
 .env.test
 .env.production
 
@@ -133,6 +134,9 @@ dist/
 calibration_target.pdf
 __pycache__/
 *.pyc
+
+# Supabase credentials (DO NOT COMMIT)
+# Use `.env.local` (already ignored above) for Vite env vars.
 
 # Debug/Output files
 output/

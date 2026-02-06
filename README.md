@@ -42,6 +42,43 @@ A zero-cost, local-first Progressive Web App (PWA) for specialty coffee analytic
 
 ---
 
+## 📝 Logging (Supabase) - NEW
+
+The app now has a separate **Logging** tab (next to **Analysis**) to record brews and bean info.
+
+### What’s implemented
+- **Top-level tabs**: Analysis vs Logging.
+- **Supabase-backed login (simple demo auth)**:
+  - Signup: `id` + `password` + `type again password`
+  - Checks if `id` is already used (no password complexity rules)
+  - Stores: `uid`, `id`, `salt`, `password_hash` (PBKDF2-SHA256 via WebCrypto)
+  - Login verifies the salted hash in the browser and saves a small session in `localStorage`
+- **New brew logging**
+  - Bean fields: roastery, producer, origin, process, varietal, cup notes, roasted on
+  - Brew fields: log date, recipe, coffee dose, coffee yield, coffee TDS (optional), water, water temp (optional), extraction note, taste note
+  - **SCA flavor wheel picker** (modular/reusable):
+    - Cascading dropdowns (broad → narrow → specific)
+    - Supports **N/A** and “broad-only” notes
+    - Notes show a colored dot
+- **Load (history) page**
+  - Lists current user’s brews as **date — bean**
+  - Clicking an entry loads its detailed view
+  - Designed to be extensible for future filters
+
+### Supabase setup
+1. Create a Supabase project.
+2. Create tables by running `supabase/schema.sql` in the Supabase SQL editor.
+3. Create a `.env.local` in the project root (gitignored) and set:
+
+   - `VITE_SUPABASE_URL`
+   - `VITE_SUPABASE_ANON_KEY`
+
+4. Restart the dev server after changing `.env.local`.
+
+> Security note: this login system is intentionally minimal for prototyping. For production, use Supabase Auth + Row Level Security (RLS) and do password verification server-side (or via Edge Functions).
+
+---
+
 ## 📋 TODO List
 
 ### Phase 1: Core CV & Frontend ✅ (Completed)
@@ -60,9 +97,12 @@ A zero-cost, local-first Progressive Web App (PWA) for specialty coffee analytic
 - [ ] **Camera Capture:** Add live camera capture UI (instead of file upload) for mobile PWA.
 
 ### Phase 3: Backend & Data
-- [ ] **Database:** Setup MariaDB on Oracle Cloud.
-- [ ] **API:** Create a lightweight API (FastAPI/Node) to sync logs.
-- [ ] **Auth:** Simple user authentication for syncing.
+- [x] **Database (prototype):** Supabase tables for users/beans/brews.
+- [x] **Auth (prototype):** Simple id/password signup+login (salted hash).
+- [x] **Logging:** Bean + brew logging + history load page.
+- [ ] **Save/load beans:** Allow saving beans and selecting from existing beans (beans will have their own uid).
+- [ ] **History filters:** Add filter UI (date range / bean / recipe / notes).
+- [ ] **Harden security:** Move to Supabase Auth + RLS (or Edge Functions) and remove client-side password verification.
 
 ---
 
