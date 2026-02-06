@@ -1,10 +1,32 @@
-import { useState, type ReactNode } from 'react';
-import { Coffee, Microscope, NotebookPen } from 'lucide-react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { Coffee, Languages, Microscope, NotebookPen } from 'lucide-react';
 import { AnalysisApp } from './analysis/AnalysisApp';
 import { LoggingApp } from './logging/LoggingApp';
+import { useI18n } from './i18n/I18nProvider';
 
 function App() {
   const [tab, setTab] = useState<'analysis' | 'logging'>('logging');
+  const { lang, setLang, t } = useI18n();
+  const [langOpen, setLangOpen] = useState(false);
+  const langRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!langOpen) return;
+    function onDocMouseDown(e: MouseEvent) {
+      const el = langRef.current;
+      if (!el) return;
+      if (!el.contains(e.target as Node)) setLangOpen(false);
+    }
+    function onDocKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') setLangOpen(false);
+    }
+    document.addEventListener('mousedown', onDocMouseDown);
+    document.addEventListener('keydown', onDocKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onDocMouseDown);
+      document.removeEventListener('keydown', onDocKeyDown);
+    };
+  }, [langOpen]);
 
   function TabButton({ active, children, onClick }: { active: boolean; children: ReactNode; onClick: () => void }) {
     return (
@@ -25,17 +47,56 @@ function App() {
       <header className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6 max-w-5xl mx-auto">
         <h1 className="text-2xl font-bold flex items-center gap-2">
           <Coffee className="w-8 h-8 text-amber-700" />
-          BeanLog
+          {t('app.title')}
         </h1>
         <div className="flex items-center gap-2">
           <TabButton active={tab === 'analysis'} onClick={() => setTab('analysis')}>
             <Microscope className="w-4 h-4" />
-            Analysis
+            {t('app.tab.analysis')}
           </TabButton>
           <TabButton active={tab === 'logging'} onClick={() => setTab('logging')}>
             <NotebookPen className="w-4 h-4" />
-            Logging
+            {t('app.tab.logging')}
           </TabButton>
+
+          <div ref={langRef} className="relative">
+            <button
+              type="button"
+              className="p-2 rounded-lg border bg-white hover:bg-gray-50"
+              aria-label={t('app.langSelector.aria')}
+              onClick={() => setLangOpen((v) => !v)}
+            >
+              <Languages className="w-4 h-4" />
+            </button>
+            {langOpen && (
+              <div className="absolute right-0 mt-2 w-40 rounded-lg border bg-white shadow-lg overflow-hidden z-30">
+                <button
+                  type="button"
+                  className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-50 ${
+                    lang === 'en-us' ? 'bg-amber-50' : 'bg-white'
+                  }`}
+                  onClick={() => {
+                    setLang('en-us');
+                    setLangOpen(false);
+                  }}
+                >
+                  {t('app.lang.english')} (EN)
+                </button>
+                <button
+                  type="button"
+                  className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-50 ${
+                    lang === 'ko-kr' ? 'bg-amber-50' : 'bg-white'
+                  }`}
+                  onClick={() => {
+                    setLang('ko-kr');
+                    setLangOpen(false);
+                  }}
+                >
+                  {t('app.lang.korean')} (KO)
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </header>
 

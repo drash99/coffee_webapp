@@ -1,12 +1,14 @@
 import { useState } from 'react';
 import type { AppUser } from '../../auth/types';
-import { login } from '../../auth/authService';
+import { AuthError, login } from '../../auth/authService';
+import { useI18n } from '../../i18n/I18nProvider';
 
 type Props = {
   onLoggedIn: (user: AppUser) => void;
 };
 
 export function LoginPage({ onLoggedIn }: Props) {
+  const { t } = useI18n();
   const [id, setId] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -19,7 +21,15 @@ export function LoginPage({ onLoggedIn }: Props) {
       const user = await login({ id, password });
       onLoggedIn(user);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Login failed.');
+      if (e instanceof AuthError) {
+        if (e.code === 'ID_REQUIRED') setError(t('auth.error.idRequired'));
+        else if (e.code === 'PASSWORD_REQUIRED') setError(t('auth.error.passwordRequired'));
+        else if (e.code === 'INVALID_CREDENTIALS') setError(t('auth.error.invalidCredentials'));
+        else if (e.code === 'SUPABASE') setError(t('auth.error.supabase', { message: e.details ?? '' }));
+        else setError(t('auth.error.loginFailed'));
+      } else {
+        setError(e instanceof Error ? e.message : t('auth.error.loginFailed'));
+      }
     } finally {
       setLoading(false);
     }
@@ -27,27 +37,27 @@ export function LoginPage({ onLoggedIn }: Props) {
 
   return (
     <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 space-y-4">
-      <h2 className="text-lg font-semibold">Log in</h2>
+      <h2 className="text-lg font-semibold">{t('auth.login.title')}</h2>
 
       <div className="space-y-2">
-        <label className="block text-xs font-medium text-gray-500">Id</label>
+        <label className="block text-xs font-medium text-gray-500">{t('auth.field.id')}</label>
         <input
           className="w-full p-2 border rounded-lg"
           value={id}
           onChange={(e) => setId(e.target.value)}
-          placeholder="your-id"
+          placeholder={t('auth.placeholder.id')}
           autoComplete="username"
           disabled={loading}
         />
       </div>
 
       <div className="space-y-2">
-        <label className="block text-xs font-medium text-gray-500">Password</label>
+        <label className="block text-xs font-medium text-gray-500">{t('auth.field.password')}</label>
         <input
           className="w-full p-2 border rounded-lg"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
-          placeholder="password"
+          placeholder={t('auth.placeholder.password')}
           type="password"
           autoComplete="current-password"
           disabled={loading}
@@ -62,7 +72,7 @@ export function LoginPage({ onLoggedIn }: Props) {
         onClick={submit}
         disabled={loading}
       >
-        {loading ? 'Logging in…' : 'Log in'}
+        {loading ? t('auth.login.button.loading') : t('auth.login.button')}
       </button>
     </div>
   );

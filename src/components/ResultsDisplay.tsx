@@ -1,5 +1,6 @@
 import { useMemo, useState, useEffect } from 'react';
 import { Scatter, Bar, Line } from 'react-chartjs-2';
+import { useI18n } from '../i18n/I18nProvider';
 
 export interface ResultsDisplayProps {
   mode: 'bean' | 'grind';
@@ -31,6 +32,7 @@ function useImageDataUrl(imageData: { data: number[]; width: number; height: num
 }
 
 export function ResultsDisplay({ mode, data, stageImageData, warpedImageData, lutCurves, loading }: ResultsDisplayProps) {
+  const { t } = useI18n();
   const stageImageUrl = useImageDataUrl(stageImageData);
   const warpedImageUrl = useImageDataUrl(warpedImageData);
   const stats = useMemo(() => {
@@ -62,7 +64,7 @@ export function ResultsDisplay({ mode, data, stageImageData, warpedImageData, lu
       <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
         <div className="text-center py-8">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-gray-900 mx-auto"></div>
-          <p className="mt-4 text-gray-600">Processing image...</p>
+          <p className="mt-4 text-gray-600">{t('results.processing')}</p>
         </div>
       </div>
     );
@@ -71,7 +73,7 @@ export function ResultsDisplay({ mode, data, stageImageData, warpedImageData, lu
   if (!data || data.length === 0 || !stats) {
     return (
       <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
-        <p className="text-gray-500 text-center py-4">No data to display. Upload an image to analyze.</p>
+        <p className="text-gray-500 text-center py-4">{t('results.noData')}</p>
       </div>
     );
   }
@@ -96,7 +98,7 @@ export function ResultsDisplay({ mode, data, stageImageData, warpedImageData, lu
     const chartData = {
       labels: binCenters.map(x => `${x.toFixed(0)}μm`),
       datasets: [{
-        label: 'Density (%)',
+        label: t('results.axis.density'),
         data: density,
         backgroundColor: 'rgba(139, 69, 19, 0.7)',
         borderColor: 'rgba(139, 69, 19, 1)',
@@ -106,18 +108,18 @@ export function ResultsDisplay({ mode, data, stageImageData, warpedImageData, lu
     
     return (
       <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 space-y-4">
-        <h2 className="text-lg font-semibold">Grind Analysis Results</h2>
+        <h2 className="text-lg font-semibold">{t('results.grind.title')}</h2>
 
         {warpedImageUrl && (
           <div className="rounded-lg overflow-hidden border border-gray-200 bg-gray-50">
-            <p className="text-xs text-gray-500 px-2 py-1">Debug: Warped (after ArUco / fallback)</p>
-            <p className="text-xs text-gray-500 px-2 pb-1">Green circles = gray ramp (gamma/LUT). Magenta = CMYK patches.</p>
-            <img src={warpedImageUrl} alt="Warped calibration sheet" className="w-full h-auto max-h-80 object-contain" />
+            <p className="text-xs text-gray-500 px-2 py-1">{t('results.debug.warped')}</p>
+            <p className="text-xs text-gray-500 px-2 pb-1">{t('results.debug.warped.help')}</p>
+            <img src={warpedImageUrl} alt={t('results.alt.warped')} className="w-full h-auto max-h-80 object-contain" />
           </div>
         )}
         {lutCurves && (
           <div className="rounded-lg border border-gray-200 bg-gray-50 p-2">
-            <p className="text-xs text-gray-500 px-2 py-1">LUT curves (input → output)</p>
+            <p className="text-xs text-gray-500 px-2 py-1">{t('results.debug.lut')}</p>
             <div className="h-48">
               <Line
                 data={{
@@ -132,8 +134,8 @@ export function ResultsDisplay({ mode, data, stageImageData, warpedImageData, lu
                   responsive: true,
                   maintainAspectRatio: false,
                   scales: {
-                    x: { title: { display: true, text: 'Input' }, min: 0, max: 255 },
-                    y: { title: { display: true, text: 'Output' }, min: 0, max: 255 }
+                    x: { title: { display: true, text: t('results.axis.input') }, min: 0, max: 255 },
+                    y: { title: { display: true, text: t('results.axis.output') }, min: 0, max: 255 }
                   },
                   plugins: { legend: { display: true } }
                 }}
@@ -143,22 +145,22 @@ export function ResultsDisplay({ mode, data, stageImageData, warpedImageData, lu
         )}
         {stageImageUrl && (
           <div className="rounded-lg overflow-hidden border border-gray-200 bg-gray-50">
-            <p className="text-xs text-gray-500 px-2 py-1">Stage (particles outlined)</p>
-            <img src={stageImageUrl} alt="Stage with particle contours" className="w-full h-auto max-h-80 object-contain" />
+            <p className="text-xs text-gray-500 px-2 py-1">{t('results.debug.stageParticles')}</p>
+            <img src={stageImageUrl} alt={t('results.alt.stageParticles')} className="w-full h-auto max-h-80 object-contain" />
           </div>
         )}
         
         <div className="grid grid-cols-3 gap-4 mb-4">
           <div className="text-center p-3 bg-amber-50 rounded-lg">
-            <div className="text-xs text-amber-800">Count</div>
+            <div className="text-xs text-amber-800">{t('results.stat.count')}</div>
             <div className="text-2xl font-bold text-amber-900">{stats.count}</div>
           </div>
           <div className="text-center p-3 bg-blue-50 rounded-lg">
-            <div className="text-xs text-blue-800">Mean (μm)</div>
+            <div className="text-xs text-blue-800">{t('results.stat.meanUm')}</div>
             <div className="text-2xl font-bold text-blue-900">{stats.mean.toFixed(1)}</div>
           </div>
           <div className="text-center p-3 bg-green-50 rounded-lg">
-            <div className="text-xs text-green-800">Std Dev (μm)</div>
+            <div className="text-xs text-green-800">{t('results.stat.stdevUm')}</div>
             <div className="text-2xl font-bold text-green-900">{stats.stdev.toFixed(1)}</div>
           </div>
         </div>
@@ -170,8 +172,8 @@ export function ResultsDisplay({ mode, data, stageImageData, warpedImageData, lu
               responsive: true,
               maintainAspectRatio: false,
               scales: {
-                x: { title: { display: true, text: 'Particle Size (μm)' } },
-                y: { title: { display: true, text: 'Density (%)' }, beginAtZero: true }
+                x: { title: { display: true, text: t('results.axis.particleSize') } },
+                y: { title: { display: true, text: t('results.axis.density') }, beginAtZero: true }
               },
               plugins: {
                 legend: { display: false }
@@ -181,7 +183,7 @@ export function ResultsDisplay({ mode, data, stageImageData, warpedImageData, lu
         </div>
         
         <div className="text-sm text-gray-600">
-          <p>Median: {stats.median.toFixed(1)}μm</p>
+          <p>{t('results.stat.median', { value: stats.median.toFixed(1) })}</p>
         </div>
       </div>
     );
@@ -193,7 +195,7 @@ export function ResultsDisplay({ mode, data, stageImageData, warpedImageData, lu
     
     const scatterData = {
       datasets: [{
-        label: 'Beans',
+        label: t('results.dataset.beans'),
         data: majorSizes.map((maj, i) => ({ x: maj, y: minorSizes[i] })),
         backgroundColor: 'rgba(139, 69, 19, 0.6)',
         pointRadius: 4
@@ -212,7 +214,7 @@ export function ResultsDisplay({ mode, data, stageImageData, warpedImageData, lu
     const lumaChartData = {
       labels: lumaBinCenters.map(x => x.toFixed(0)),
       datasets: [{
-        label: 'Count',
+        label: t('results.stat.count'),
         data: lumaHist,
         backgroundColor: 'rgba(139, 69, 19, 0.7)',
         borderColor: 'rgba(139, 69, 19, 1)',
@@ -222,18 +224,18 @@ export function ResultsDisplay({ mode, data, stageImageData, warpedImageData, lu
     
     return (
       <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 space-y-4">
-        <h2 className="text-lg font-semibold">Bean Analysis Results</h2>
+        <h2 className="text-lg font-semibold">{t('results.bean.title')}</h2>
 
         {warpedImageUrl && (
           <div className="rounded-lg overflow-hidden border border-gray-200 bg-gray-50">
-            <p className="text-xs text-gray-500 px-2 py-1">Debug: Warped (after ArUco / fallback)</p>
-            <p className="text-xs text-gray-500 px-2 pb-1">Green circles = gray ramp (gamma/LUT). Magenta = CMYK patches.</p>
-            <img src={warpedImageUrl} alt="Warped calibration sheet" className="w-full h-auto max-h-80 object-contain" />
+            <p className="text-xs text-gray-500 px-2 py-1">{t('results.debug.warped')}</p>
+            <p className="text-xs text-gray-500 px-2 pb-1">{t('results.debug.warped.help')}</p>
+            <img src={warpedImageUrl} alt={t('results.alt.warped')} className="w-full h-auto max-h-80 object-contain" />
           </div>
         )}
         {lutCurves && (
           <div className="rounded-lg border border-gray-200 bg-gray-50 p-2">
-            <p className="text-xs text-gray-500 px-2 py-1">LUT curves (input → output)</p>
+            <p className="text-xs text-gray-500 px-2 py-1">{t('results.debug.lut')}</p>
             <div className="h-48">
               <Line
                 data={{
@@ -248,8 +250,8 @@ export function ResultsDisplay({ mode, data, stageImageData, warpedImageData, lu
                   responsive: true,
                   maintainAspectRatio: false,
                   scales: {
-                    x: { title: { display: true, text: 'Input' }, min: 0, max: 255 },
-                    y: { title: { display: true, text: 'Output' }, min: 0, max: 255 }
+                    x: { title: { display: true, text: t('results.axis.input') }, min: 0, max: 255 },
+                    y: { title: { display: true, text: t('results.axis.output') }, min: 0, max: 255 }
                   },
                   plugins: { legend: { display: true } }
                 }}
@@ -259,30 +261,30 @@ export function ResultsDisplay({ mode, data, stageImageData, warpedImageData, lu
         )}
         {stageImageUrl && (
           <div className="rounded-lg overflow-hidden border border-gray-200 bg-gray-50">
-            <p className="text-xs text-gray-500 px-2 py-1">Stage (beans outlined)</p>
-            <img src={stageImageUrl} alt="Stage with bean contours" className="w-full h-auto max-h-80 object-contain" />
+            <p className="text-xs text-gray-500 px-2 py-1">{t('results.debug.stageBeans')}</p>
+            <img src={stageImageUrl} alt={t('results.alt.stageBeans')} className="w-full h-auto max-h-80 object-contain" />
           </div>
         )}
         
         <div className="grid grid-cols-2 gap-4 mb-4">
           <div className="text-center p-3 bg-amber-50 rounded-lg">
-            <div className="text-xs text-amber-800">Count</div>
+            <div className="text-xs text-amber-800">{t('results.stat.count')}</div>
             <div className="text-2xl font-bold text-amber-900">{stats.count}</div>
           </div>
           <div className="text-center p-3 bg-blue-50 rounded-lg">
-            <div className="text-xs text-blue-800">Avg Size (mm)</div>
+            <div className="text-xs text-blue-800">{t('results.stat.avgSizeMm')}</div>
             <div className="text-2xl font-bold text-blue-900">{stats.sizeMean.toFixed(2)}</div>
             <div className="text-xs text-blue-600">±{stats.sizeStdev.toFixed(2)}</div>
           </div>
           <div className="text-center p-3 bg-purple-50 rounded-lg">
-            <div className="text-xs text-purple-800">Avg Lightness</div>
+            <div className="text-xs text-purple-800">{t('results.stat.avgLightness')}</div>
             <div className="text-2xl font-bold text-purple-900">{stats.lumaMean.toFixed(1)}</div>
             <div className="text-xs text-purple-600">±{stats.lumaStdev.toFixed(1)}</div>
           </div>
           <div className="text-center p-3 bg-green-50 rounded-lg">
-            <div className="text-xs text-green-800">Roast Level</div>
+            <div className="text-xs text-green-800">{t('results.stat.roastLevel')}</div>
             <div className="text-xl font-bold text-green-900">
-              {stats.lumaMean > 150 ? 'Light' : stats.lumaMean > 100 ? 'Medium' : 'Dark'}
+              {stats.lumaMean > 150 ? t('results.roast.light') : stats.lumaMean > 100 ? t('results.roast.medium') : t('results.roast.dark')}
             </div>
           </div>
         </div>
@@ -295,8 +297,8 @@ export function ResultsDisplay({ mode, data, stageImageData, warpedImageData, lu
                 responsive: true,
                 maintainAspectRatio: false,
                 scales: {
-                  x: { title: { display: true, text: 'Major Axis (mm)' } },
-                  y: { title: { display: true, text: 'Minor Axis (mm)' } }
+                  x: { title: { display: true, text: t('results.axis.majorAxis') } },
+                  y: { title: { display: true, text: t('results.axis.minorAxis') } }
                 },
                 plugins: {
                   legend: { display: false }
@@ -312,8 +314,8 @@ export function ResultsDisplay({ mode, data, stageImageData, warpedImageData, lu
                 responsive: true,
                 maintainAspectRatio: false,
                 scales: {
-                  x: { title: { display: true, text: 'Lightness (L)' } },
-                  y: { title: { display: true, text: 'Count' }, beginAtZero: true }
+                  x: { title: { display: true, text: t('results.axis.lightness') } },
+                  y: { title: { display: true, text: t('results.stat.count') }, beginAtZero: true }
                 },
                 plugins: {
                   legend: { display: false }

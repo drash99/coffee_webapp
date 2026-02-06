@@ -2,6 +2,24 @@ import { getSupabaseClient } from '../config/supabase';
 import { generateSaltBase64, pbkdf2HashBase64 } from './crypto';
 import type { AppUser, AppUserRow } from './types';
 
+export type AuthErrorCode =
+  | 'ID_REQUIRED'
+  | 'PASSWORD_REQUIRED'
+  | 'PASSWORD_MISMATCH'
+  | 'ID_IN_USE'
+  | 'INVALID_CREDENTIALS'
+  | 'SUPABASE';
+
+export class AuthError extends Error {
+  code: AuthErrorCode;
+  details?: string;
+  constructor(code: AuthErrorCode, details?: string) {
+    super(code);
+    this.code = code;
+    this.details = details;
+  }
+}
+
 export type SignupInput = {
   id: string;
   password: string;
@@ -16,17 +34,17 @@ export type LoginInput = {
 export async function signup(input: SignupInput): Promise<AppUser> {
   const supabase = getSupabaseClient();
   const id = input.id.trim();
-  if (!id) throw new Error('Please enter an id.');
-  if (!input.password) throw new Error('Please enter a password.');
-  if (input.password !== input.password2) throw new Error('Passwords do not match.');
+  if (!id) throw new AuthError('ID_REQUIRED');
+  if (!input.password) throw new AuthError('PASSWORD_REQUIRED');
+  if (input.password !== input.password2) throw new AuthError('PASSWORD_MISMATCH');
 
   const { data: existing, error: existingErr } = await supabase
     .from('app_users')
     .select('uid')
     .eq('id', id)
     .maybeSingle();
-  if (existingErr) throw new Error(existingErr.message);
-  if (existing) throw new Error('That id is already in use.');
+  if (existingErr) throw new AuthError('SUPABASE', existingErr.message);
+  if (existing) throw new AuthError('ID_IN_USE');
 
   const uid = crypto.randomUUID();
   const salt = generateSaltBase64(16);
@@ -38,7 +56,7 @@ export async function signup(input: SignupInput): Promise<AppUser> {
     salt,
     password_hash
   } satisfies AppUserRow);
-  if (insertErr) throw new Error(insertErr.message);
+  if (insertErr) throw new AuthError('SUPABASE', insertErr.message);
 
   return { uid, id };
 }
@@ -46,19 +64,19 @@ export async function signup(input: SignupInput): Promise<AppUser> {
 export async function login(input: LoginInput): Promise<AppUser> {
   const supabase = getSupabaseClient();
   const id = input.id.trim();
-  if (!id) throw new Error('Please enter an id.');
-  if (!input.password) throw new Error('Please enter a password.');
+  if (!id) throw new AuthError('ID_REQUIRED');
+  if (!input.password) throw new AuthError('PASSWORD_REQUIRED');
 
   const { data: row, error } = await supabase
     .from('app_users')
     .select('uid,id,salt,password_hash')
     .eq('id', id)
     .maybeSingle<AppUserRow>();
-  if (error) throw new Error(error.message);
-  if (!row) throw new Error('Invalid id or password.');
+  if (error) throw new AuthError('SUPABASE', error.message);
+  if (!row) throw new AuthError('INVALID_CREDENTIALS');
 
   const computed = await pbkdf2HashBase64(input.password, row.salt);
-  if (computed !== row.password_hash) throw new Error('Invalid id or password.');
+  if (computed !== row.password_hash) throw new AuthError('INVALID_CREDENTIALS');
 
   return { uid: row.uid, id: row.id };
 }

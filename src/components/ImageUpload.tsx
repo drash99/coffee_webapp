@@ -1,5 +1,6 @@
-import { useState, useRef } from 'react';
+import { useRef } from 'react';
 import { Upload, Coffee, BarChart3 } from 'lucide-react';
+import { useI18n } from '../i18n/I18nProvider';
 
 interface ImageUploadProps {
   mode: 'bean' | 'grind';
@@ -8,6 +9,7 @@ interface ImageUploadProps {
 }
 
 export function ImageUpload({ mode, onImageSelect, disabled }: ImageUploadProps) {
+  const { t } = useI18n();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleClick = () => {
@@ -25,7 +27,7 @@ export function ImageUpload({ mode, onImageSelect, disabled }: ImageUploadProps)
     <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
       <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
         {mode === 'bean' ? <Coffee className="w-5 h-5" /> : <BarChart3 className="w-5 h-5" />}
-        {mode === 'bean' ? 'Bean Analysis' : 'Grind Analysis'}
+        {mode === 'bean' ? t('upload.bean.title') : t('upload.grind.title')}
       </h2>
       
       <input
@@ -43,11 +45,13 @@ export function ImageUpload({ mode, onImageSelect, disabled }: ImageUploadProps)
         className="w-full py-3 bg-gray-900 text-white rounded-lg font-medium hover:bg-gray-800 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
       >
         <Upload className="w-5 h-5" />
-        Upload {mode === 'bean' ? 'Bean' : 'Grind'} Image
+        {t('upload.button', { mode: mode === 'bean' ? t('upload.mode.bean') : t('upload.mode.grind') })}
       </button>
       
       <p className="text-xs text-gray-500 mt-2 text-center">
-        Place {mode === 'bean' ? 'beans' : 'grinds'} on the calibration sheet stage
+        {t('upload.help', {
+          modePlural: mode === 'bean' ? t('upload.modePlural.bean') : t('upload.modePlural.grind')
+        })}
       </p>
     </div>
   );

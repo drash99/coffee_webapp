@@ -1,9 +1,16 @@
--- BeanLog (logging) schema for Supabase Postgres
---
--- This app uses a simple, custom “app_users” table (uid/id/salt/hash).
--- For production, prefer Supabase Auth + RLS; this demo setup is intentionally minimal.
+-- DANGEROUS: Wipes all logging/auth data for this app in the Supabase project.
+-- Run this only if you are OK losing existing data.
 
-create table if not exists public.app_users (
+-- Drop in dependency order
+drop table if exists public.grinder_particle_sizes cascade;
+drop table if exists public.brews cascade;
+drop table if exists public.beans cascade;
+drop table if exists public.grinders cascade;
+drop table if exists public.app_users cascade;
+
+-- Recreate (clean schema, no legacy columns)
+
+create table public.app_users (
   uid uuid primary key,
   id text not null unique,
   salt text not null,
@@ -11,7 +18,7 @@ create table if not exists public.app_users (
   created_at timestamptz not null default now()
 );
 
-create table if not exists public.beans (
+create table public.beans (
   uid uuid primary key,
   user_uid uuid not null references public.app_users(uid) on delete cascade,
   bean_name text,
@@ -27,15 +34,15 @@ create table if not exists public.beans (
   created_at timestamptz not null default now()
 );
 
-create table if not exists public.grinders (
+create table public.grinders (
   uid uuid primary key,
   user_uid uuid not null references public.app_users(uid) on delete cascade,
-  maker text,
-  model text,
+  maker text not null,
+  model text not null,
   created_at timestamptz not null default now()
 );
 
-create table if not exists public.brews (
+create table public.brews (
   uid uuid primary key,
   user_uid uuid not null references public.app_users(uid) on delete cascade,
   brew_date timestamptz not null,
@@ -56,7 +63,7 @@ create table if not exists public.brews (
   created_at timestamptz not null default now()
 );
 
-create table if not exists public.grinder_particle_sizes (
+create table public.grinder_particle_sizes (
   uid uuid primary key,
   user_uid uuid not null references public.app_users(uid) on delete cascade,
   grinder_uid uuid not null references public.grinders(uid) on delete cascade,
@@ -65,9 +72,12 @@ create table if not exists public.grinder_particle_sizes (
   created_at timestamptz not null default now()
 );
 
-create index if not exists brews_user_uid_brew_date_idx on public.brews(user_uid, brew_date desc);
-create index if not exists beans_user_uid_created_at_idx on public.beans(user_uid, created_at desc);
-create index if not exists grinders_user_uid_created_at_idx on public.grinders(user_uid, created_at desc);
-create index if not exists grinder_particle_sizes_user_grinder_idx on public.grinder_particle_sizes(user_uid, grinder_uid);
+create index brews_user_uid_brew_date_idx on public.brews(user_uid, brew_date desc);
+create index beans_user_uid_created_at_idx on public.beans(user_uid, created_at desc);
+create index grinders_user_uid_created_at_idx on public.grinders(user_uid, created_at desc);
+create index grinder_particle_sizes_user_grinder_idx on public.grinder_particle_sizes(user_uid, grinder_uid);
+
+-- Refresh PostgREST schema cache if needed:
+-- notify pgrst, 'reload schema';
 
 

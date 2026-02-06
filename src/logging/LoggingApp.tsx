@@ -6,6 +6,7 @@ import { LoginPage } from './pages/LoginPage';
 import { SignupPage } from './pages/SignupPage';
 import { NewBrewPage } from './pages/NewBrewPage';
 import { HistoryPage } from './pages/HistoryPage';
+import { useI18n } from '../i18n/I18nProvider';
 
 type AuthTab = 'login' | 'signup';
 type LogTab = 'new' | 'history';
@@ -25,6 +26,7 @@ function TabButton({ active, children, onClick }: { active: boolean; children: R
 }
 
 export function LoggingApp() {
+  const { t } = useI18n();
   const [user, setUser] = useState<AppUser | null>(null);
   const [authTab, setAuthTab] = useState<AuthTab>('login');
   const [logTab, setLogTab] = useState<LogTab>('new');
@@ -37,9 +39,11 @@ export function LoggingApp() {
     return (
       <div className="max-w-2xl mx-auto space-y-4">
         <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 space-y-2">
-          <h2 className="text-lg font-semibold">Supabase not configured</h2>
+          <h2 className="text-lg font-semibold">{t('logging.supabaseNotConfigured.title')}</h2>
           <p className="text-sm text-gray-600">
-            Create <code className="px-1 py-0.5 bg-gray-100 rounded">.env.local</code> in the project root with:
+            {t('logging.supabaseNotConfigured.body.1')}{' '}
+            <code className="px-1 py-0.5 bg-gray-100 rounded">{t('logging.supabaseNotConfigured.body.2')}</code>{' '}
+            {t('logging.supabaseNotConfigured.body.3')}
           </p>
           <pre className="text-xs bg-gray-50 border rounded-lg p-3 overflow-auto">
             VITE_SUPABASE_URL="https://YOUR_PROJECT_REF.supabase.co"
@@ -47,7 +51,8 @@ export function LoggingApp() {
             VITE_SUPABASE_ANON_KEY="YOUR_SUPABASE_ANON_KEY"
           </pre>
           <p className="text-xs text-gray-500">
-            This file is gitignored. After setting it, restart <code className="px-1 py-0.5 bg-gray-100 rounded">npm run dev</code>.
+            {t('logging.supabaseNotConfigured.body.4')}{' '}
+            <code className="px-1 py-0.5 bg-gray-100 rounded">npm run dev</code>.
           </p>
         </div>
       </div>
@@ -59,10 +64,10 @@ export function LoggingApp() {
       <div className="max-w-md mx-auto space-y-4">
         <div className="flex items-center gap-2">
           <TabButton active={authTab === 'login'} onClick={() => setAuthTab('login')}>
-            Log in
+            {t('auth.tab.login')}
           </TabButton>
           <TabButton active={authTab === 'signup'} onClick={() => setAuthTab('signup')}>
-            Sign up
+            {t('auth.tab.signup')}
           </TabButton>
         </div>
 
@@ -89,7 +94,7 @@ export function LoggingApp() {
     <div className="max-w-4xl mx-auto space-y-4">
       <div className="flex items-center justify-between">
         <div className="text-sm text-gray-600">
-          Logged in as <span className="font-medium text-gray-900">{user.id}</span>
+          {t('logging.loggedInAs')} <span className="font-medium text-gray-900">{user.id}</span>
         </div>
         <button
           type="button"
@@ -99,16 +104,16 @@ export function LoggingApp() {
             setUser(null);
           }}
         >
-          Log out
+          {t('logging.logout')}
         </button>
       </div>
 
       <div className="flex items-center gap-2">
         <TabButton active={logTab === 'new'} onClick={() => setLogTab('new')}>
-          New brew
+          {t('logging.tab.newBrew')}
         </TabButton>
         <TabButton active={logTab === 'history'} onClick={() => setLogTab('history')}>
-          History
+          {t('logging.tab.history')}
         </TabButton>
       </div>
 

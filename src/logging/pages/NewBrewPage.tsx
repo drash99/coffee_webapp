@@ -2,7 +2,9 @@ import { useMemo, useState } from 'react';
 import type { AppUser } from '../../auth/types';
 import { getSupabaseClient } from '../../config/supabase';
 import { FlavorWheelPicker } from '../components/FlavorWheelPicker';
+import { StarRating } from '../components/StarRating';
 import type { BeanInput, BrewInput, FlavorNote, GrinderInput } from '../types';
+import { useI18n } from '../../i18n/I18nProvider';
 
 type Props = {
   user: AppUser;
@@ -28,14 +30,17 @@ function fToC(f: number): number {
 }
 
 export function NewBrewPage({ user }: Props) {
+  const { t } = useI18n();
   const [bean, setBean] = useState<BeanInput>({
     bean_name: '',
     roastery: '',
     producer: '',
-    origin: '',
+    origin_location: '',
+    origin_country: '',
     process: '',
     varietal: '',
     cup_notes: '',
+    cup_flavor_notes: [],
     roasted_on: ''
   });
 
@@ -53,13 +58,21 @@ export function NewBrewPage({ user }: Props) {
     coffee_tds: '',
     water: '',
     water_temp: '',
+    grind_median_um: '',
+    rating: 0,
     extraction_note: '',
     taste_note: '',
-    cup_flavor_notes: [],
     taste_flavor_notes: []
   });
 
   const [waterTempUnit, setWaterTempUnit] = useState<'C' | 'F'>('C');
+
+  const [mapMedianUm, setMapMedianUm] = useState('');
+  const [mapSaving, setMapSaving] = useState(false);
+  const [mapMsg, setMapMsg] = useState<string | null>(null);
+
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchRows, setSearchRows] = useState<Array<{ grinder_setting: string; particle_median_um: number }>>([]);
 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -73,11 +86,94 @@ export function NewBrewPage({ user }: Props) {
     }
   }, [brew.brew_date]);
 
+  async function getOrCreateGrinderUid(makerRaw: string, modelRaw: string): Promise<string> {
+    const maker = makerRaw.trim();
+    const model = modelRaw.trim();
+    if (!maker || !model) {
+      throw new Error(t('grindMap.error.missingGrinder'));
+    }
+
+    const supabase = getSupabaseClient();
+    const { data: found, error: foundErr } = await supabase
+      .from('grinders')
+      .select('uid')
+      .eq('user_uid', user.uid)
+      .ilike('maker', maker)
+      .ilike('model', model)
+      .maybeSingle();
+    if (foundErr) throw new Error(foundErr.message);
+    if (found?.uid) return found.uid as string;
+
+    const uid = crypto.randomUUID();
+    const { error: insertErr } = await supabase.from('grinders').insert({
+      uid,
+      user_uid: user.uid,
+      maker,
+      model
+    });
+    if (insertErr) throw new Error(insertErr.message);
+    return uid;
+  }
+
+  async function submitParticleSize() {
+    setMapMsg(null);
+    const setting = grinder.setting.trim();
+    if (!setting) {
+      setMapMsg(t('grindMap.error.missingSetting'));
+      return;
+    }
+    const median = toNullableNumber(mapMedianUm);
+    if (median == null) {
+      setMapMsg(t('grindMap.error.missingMedian'));
+      return;
+    }
+
+    setMapSaving(true);
+    try {
+      const supabase = getSupabaseClient();
+      const grinder_uid = await getOrCreateGrinderUid(grinder.maker, grinder.model);
+      const { error: insErr } = await supabase.from('grinder_particle_sizes').insert({
+        uid: crypto.randomUUID(),
+        user_uid: user.uid,
+        grinder_uid,
+        grinder_setting: setting,
+        particle_median_um: median
+      });
+      if (insErr) throw new Error(insErr.message);
+      setMapMsg(t('grindMap.saved'));
+    } catch (e) {
+      setMapMsg(e instanceof Error ? e.message : t('newBrew.error.saveFailed'));
+    } finally {
+      setMapSaving(false);
+    }
+  }
+
+  async function searchParticleSizes() {
+    setMapMsg(null);
+    setSearchRows([]);
+    setSearchLoading(true);
+    try {
+      const supabase = getSupabaseClient();
+      const grinder_uid = await getOrCreateGrinderUid(grinder.maker, grinder.model);
+      const { data, error: qErr } = await supabase
+        .from('grinder_particle_sizes')
+        .select('grinder_setting,particle_median_um')
+        .eq('user_uid', user.uid)
+        .eq('grinder_uid', grinder_uid);
+      if (qErr) throw new Error(qErr.message);
+      setSearchRows((data ?? []) as Array<{ grinder_setting: string; particle_median_um: number }>);
+    } catch (e) {
+      setMapMsg(e instanceof Error ? e.message : t('common.loadFailed'));
+    } finally {
+      setSearchLoading(false);
+    }
+  }
+
   async function save() {
     setError(null);
     setOk(null);
     if (!brewDateIso) {
-      setError('Please enter a valid brew date.');
+      setError(t('newBrew.error.invalidBrewDate'));
       return;
     }
 
@@ -86,7 +182,6 @@ export function NewBrewPage({ user }: Props) {
       const supabase = getSupabaseClient();
 
       const bean_uid = crypto.randomUUID();
-      const grinder_uid = crypto.randomUUID();
       const brew_uid = crypto.randomUUID();
 
       const { error: beanErr } = await supabase.from('beans').insert({
@@ -95,22 +190,18 @@ export function NewBrewPage({ user }: Props) {
         bean_name: bean.bean_name || null,
         roastery: bean.roastery || null,
         producer: bean.producer || null,
-        origin: bean.origin || null,
+        origin_location: bean.origin_location || null,
+        origin_country: bean.origin_country || null,
         process: bean.process || null,
         varietal: bean.varietal || null,
         cup_notes: bean.cup_notes || null,
+        cup_flavor_notes: (bean.cup_flavor_notes as FlavorNote[]) || [],
         roasted_on: bean.roasted_on || null
       });
       if (beanErr) throw new Error(beanErr.message);
 
-      const { error: grinderErr } = await supabase.from('grinders').insert({
-        uid: grinder_uid,
-        user_uid: user.uid,
-        maker: grinder.maker || null,
-        model: grinder.model || null,
-        setting: grinder.setting || null
-      });
-      if (grinderErr) throw new Error(grinderErr.message);
+      const grinder_uid =
+        grinder.maker.trim() && grinder.model.trim() ? await getOrCreateGrinderUid(grinder.maker, grinder.model) : null;
 
       const waterTempRaw = toNullableNumber(brew.water_temp);
       const water_temp_c =
@@ -122,22 +213,35 @@ export function NewBrewPage({ user }: Props) {
         brew_date: brewDateIso,
         bean_uid,
         grinder_uid,
+        grinder_setting: grinder.setting || null,
         recipe: brew.recipe || null,
         coffee_dose_g: toNullableNumber(brew.coffee_dose_g),
         coffee_yield_g: toNullableNumber(brew.coffee_yield_g),
         coffee_tds: toNullableNumber(brew.coffee_tds),
         water: brew.water || null,
         water_temp_c,
+        grind_median_um: toNullableNumber(brew.grind_median_um),
+        rating: brew.rating > 0 ? brew.rating : null,
         extraction_note: brew.extraction_note || null,
         taste_note: brew.taste_note || null,
-        cup_flavor_notes: (brew.cup_flavor_notes as FlavorNote[]) || [],
         taste_flavor_notes: (brew.taste_flavor_notes as FlavorNote[]) || []
       });
       if (brewErr) throw new Error(brewErr.message);
 
-      setOk('Saved!');
+      setOk(t('newBrew.saved'));
       // Keep brew date, clear the rest for convenience
-      setBean({ bean_name: '', roastery: '', producer: '', origin: '', process: '', varietal: '', cup_notes: '', roasted_on: '' });
+      setBean({
+        bean_name: '',
+        roastery: '',
+        producer: '',
+        origin_location: '',
+        origin_country: '',
+        process: '',
+        varietal: '',
+        cup_notes: '',
+        cup_flavor_notes: [],
+        roasted_on: ''
+      });
       setGrinder({ maker: '', model: '', setting: '' });
       setBrew((prev) => ({
         ...prev,
@@ -147,13 +251,16 @@ export function NewBrewPage({ user }: Props) {
         coffee_tds: '',
         water: '',
         water_temp: '',
+        grind_median_um: '',
+        rating: 0,
         extraction_note: '',
         taste_note: '',
-        cup_flavor_notes: [],
         taste_flavor_notes: []
       }));
+      setMapMedianUm('');
+      setSearchRows([]);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to save.');
+      setError(e instanceof Error ? e.message : t('newBrew.error.saveFailed'));
     } finally {
       setSaving(false);
     }
@@ -162,40 +269,54 @@ export function NewBrewPage({ user }: Props) {
   return (
     <div className="space-y-6">
       <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 space-y-4">
-        <h2 className="text-lg font-semibold">Bean</h2>
+        <h2 className="text-lg font-semibold">{t('newBrew.bean.title')}</h2>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div className="sm:col-span-2">
-            <label className="block text-xs font-medium text-gray-500 mb-1">Bean name</label>
+            <label className="block text-xs font-medium text-gray-500 mb-1">{t('bean.field.name')}</label>
             <input
               className="w-full p-2 border rounded-lg"
               value={bean.bean_name}
               onChange={(e) => setBean({ ...bean, bean_name: e.target.value })}
-              placeholder="e.g. Ethiopia Gedeb"
+              placeholder={t('bean.placeholder.name')}
             />
           </div>
           <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">Roastery</label>
+            <label className="block text-xs font-medium text-gray-500 mb-1">{t('bean.field.roastery')}</label>
             <input className="w-full p-2 border rounded-lg" value={bean.roastery} onChange={(e) => setBean({ ...bean, roastery: e.target.value })} />
           </div>
           <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">Producer</label>
+            <label className="block text-xs font-medium text-gray-500 mb-1">{t('bean.field.producer')}</label>
             <input className="w-full p-2 border rounded-lg" value={bean.producer} onChange={(e) => setBean({ ...bean, producer: e.target.value })} />
           </div>
           <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">Origin</label>
-            <input className="w-full p-2 border rounded-lg" value={bean.origin} onChange={(e) => setBean({ ...bean, origin: e.target.value })} />
+            <label className="block text-xs font-medium text-gray-500 mb-1">{t('bean.field.originLocation')}</label>
+            <input
+              className="w-full p-2 border rounded-lg"
+              value={bean.origin_location}
+              onChange={(e) => setBean({ ...bean, origin_location: e.target.value })}
+              placeholder={t('bean.placeholder.originLocation')}
+            />
           </div>
           <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">Process</label>
+            <label className="block text-xs font-medium text-gray-500 mb-1">{t('bean.field.originCountry')}</label>
+            <input
+              className="w-full p-2 border rounded-lg"
+              value={bean.origin_country}
+              onChange={(e) => setBean({ ...bean, origin_country: e.target.value })}
+              placeholder={t('bean.placeholder.originCountry')}
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">{t('bean.field.process')}</label>
             <input className="w-full p-2 border rounded-lg" value={bean.process} onChange={(e) => setBean({ ...bean, process: e.target.value })} />
           </div>
           <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">Varietal</label>
+            <label className="block text-xs font-medium text-gray-500 mb-1">{t('bean.field.varietal')}</label>
             <input className="w-full p-2 border rounded-lg" value={bean.varietal} onChange={(e) => setBean({ ...bean, varietal: e.target.value })} />
           </div>
           <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">Roasted on</label>
+            <label className="block text-xs font-medium text-gray-500 mb-1">{t('bean.field.roastedOn')}</label>
             <input
               className="w-full p-2 border rounded-lg"
               type="date"
@@ -206,22 +327,38 @@ export function NewBrewPage({ user }: Props) {
         </div>
 
         <div>
-          <label className="block text-xs font-medium text-gray-500 mb-1">Cup notes (free text)</label>
+          <label className="block text-xs font-medium text-gray-500 mb-1">{t('bean.field.notesFreeText')}</label>
           <textarea
             className="w-full p-2 border rounded-lg min-h-20"
             value={bean.cup_notes}
             onChange={(e) => setBean({ ...bean, cup_notes: e.target.value })}
-            placeholder="Anything you want to note about this bean"
+            placeholder={t('bean.placeholder.notesFreeText')}
+          />
+        </div>
+
+        <div className="grid grid-cols-1 gap-4">
+          <FlavorWheelPicker
+            label={t('bean.field.cupNotesSca')}
+            value={bean.cup_flavor_notes}
+            onChange={(next) => setBean({ ...bean, cup_flavor_notes: next })}
           />
         </div>
       </div>
 
       <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 space-y-4">
-        <h2 className="text-lg font-semibold">Brew</h2>
+        <h2 className="text-lg font-semibold">{t('newBrew.brew.title')}</h2>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="sm:col-span-2">
+            <label className="block text-xs font-medium text-gray-500 mb-1">{t('brew.field.rating')}</label>
+            <div className="flex items-center gap-3">
+              <StarRating value={brew.rating} onChange={(next) => setBrew({ ...brew, rating: next })} disabled={saving} />
+              <div className="text-sm text-gray-600 tabular-nums">{brew.rating.toFixed(1)}</div>
+            </div>
+          </div>
+
           <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">Log date</label>
+            <label className="block text-xs font-medium text-gray-500 mb-1">{t('brew.field.logDate')}</label>
             <input
               className="w-full p-2 border rounded-lg"
               type="date"
@@ -230,40 +367,99 @@ export function NewBrewPage({ user }: Props) {
             />
           </div>
           <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">Water</label>
-            <input className="w-full p-2 border rounded-lg" value={brew.water} onChange={(e) => setBrew({ ...brew, water: e.target.value })} placeholder="e.g. tap, filtered, TWW" />
+            <label className="block text-xs font-medium text-gray-500 mb-1">{t('brew.field.water')}</label>
+            <input
+              className="w-full p-2 border rounded-lg"
+              value={brew.water}
+              onChange={(e) => setBrew({ ...brew, water: e.target.value })}
+              placeholder={t('brew.placeholder.water')}
+            />
           </div>
 
           <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">Grinder maker</label>
+            <label className="block text-xs font-medium text-gray-500 mb-1">{t('grinder.field.maker')}</label>
             <input
               className="w-full p-2 border rounded-lg"
               value={grinder.maker}
               onChange={(e) => setGrinder({ ...grinder, maker: e.target.value })}
-              placeholder="e.g. Comandante"
+              placeholder={t('grinder.placeholder.maker')}
             />
           </div>
           <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">Grinder model</label>
+            <label className="block text-xs font-medium text-gray-500 mb-1">{t('grinder.field.model')}</label>
             <input
               className="w-full p-2 border rounded-lg"
               value={grinder.model}
               onChange={(e) => setGrinder({ ...grinder, model: e.target.value })}
-              placeholder="e.g. C40 Mk4"
+              placeholder={t('grinder.placeholder.model')}
             />
           </div>
           <div className="sm:col-span-2">
-            <label className="block text-xs font-medium text-gray-500 mb-1">Grinder setting</label>
+            <label className="block text-xs font-medium text-gray-500 mb-1">{t('grinder.field.setting')}</label>
             <input
               className="w-full p-2 border rounded-lg"
               value={grinder.setting}
               onChange={(e) => setGrinder({ ...grinder, setting: e.target.value })}
-              placeholder="e.g. 24 clicks"
+              placeholder={t('grinder.placeholder.setting')}
             />
           </div>
 
+          <div className="sm:col-span-2 grid grid-cols-1 sm:grid-cols-3 gap-2">
+            <div className="sm:col-span-1">
+              <label className="block text-xs font-medium text-gray-500 mb-1">{t('grindMap.field.particleMedianUm')}</label>
+              <input
+                className="w-full p-2 border rounded-lg"
+                type="number"
+                step="1"
+                value={mapMedianUm}
+                onChange={(e) => setMapMedianUm(e.target.value)}
+                placeholder={t('grindMap.placeholder.particleMedianUm')}
+              />
+            </div>
+            <div className="sm:col-span-2 flex items-end gap-2">
+              <button
+                type="button"
+                className="px-3 py-2 rounded-lg bg-gray-900 text-white text-sm disabled:bg-gray-300"
+                onClick={submitParticleSize}
+                disabled={mapSaving}
+              >
+                {mapSaving ? t('grindMap.save.saving') : t('grindMap.save')}
+              </button>
+              <button
+                type="button"
+                className="px-3 py-2 rounded-lg border bg-white text-sm hover:bg-gray-50 disabled:bg-gray-100"
+                onClick={searchParticleSizes}
+                disabled={searchLoading}
+              >
+                {searchLoading ? t('history.refresh.loading') : t('brew.grind.search')}
+              </button>
+            </div>
+          </div>
+
+          {(mapMsg || searchRows.length > 0) && (
+            <div className="sm:col-span-2 space-y-2">
+              {mapMsg && <div className="text-xs text-gray-600">{mapMsg}</div>}
+              {searchRows.length === 0 ? (
+                <div className="text-xs text-gray-500">{t('brew.grind.search.none')}</div>
+              ) : (
+                <div className="rounded-lg border bg-white">
+                  <div className="px-3 py-2 text-xs font-medium text-gray-700 bg-gray-50 border-b">
+                    {t('brew.grind.search.results')}
+                  </div>
+                  <div className="divide-y">
+                    {searchRows.map((r, idx) => (
+                      <div key={`${r.grinder_setting}-${idx}`} className="px-3 py-2 text-sm text-gray-800">
+                        <span className="font-medium">{r.grinder_setting}</span> — {r.particle_median_um}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">Coffee dose (g)</label>
+            <label className="block text-xs font-medium text-gray-500 mb-1">{t('brew.field.dose')}</label>
             <input
               className="w-full p-2 border rounded-lg"
               type="number"
@@ -273,7 +469,7 @@ export function NewBrewPage({ user }: Props) {
             />
           </div>
           <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">Coffee yield (g)</label>
+            <label className="block text-xs font-medium text-gray-500 mb-1">{t('brew.field.yield')}</label>
             <input
               className="w-full p-2 border rounded-lg"
               type="number"
@@ -283,20 +479,20 @@ export function NewBrewPage({ user }: Props) {
             />
           </div>
           <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">Coffee TDS (%) (N/A allowed)</label>
+            <label className="block text-xs font-medium text-gray-500 mb-1">{t('brew.field.tds')}</label>
             <input
               className="w-full p-2 border rounded-lg"
               type="number"
               step="0.01"
               value={brew.coffee_tds}
               onChange={(e) => setBrew({ ...brew, coffee_tds: e.target.value })}
-              placeholder="leave empty if N/A"
+              placeholder={t('brew.placeholder.naAllowed')}
             />
           </div>
           <div>
             <div className="flex items-center justify-between">
               <label className="block text-xs font-medium text-gray-500 mb-1">
-                Water temp (°{waterTempUnit}) (N/A allowed)
+                {t('brew.field.waterTemp', { unit: waterTempUnit })}
               </label>
               <label className="flex items-center gap-2 text-xs text-gray-600 select-none">
                 <input
@@ -305,7 +501,7 @@ export function NewBrewPage({ user }: Props) {
                   checked={waterTempUnit === 'F'}
                   onChange={(e) => setWaterTempUnit(e.target.checked ? 'F' : 'C')}
                 />
-                °F
+                {t('brew.unit.f')}
               </label>
             </div>
             <input
@@ -314,29 +510,36 @@ export function NewBrewPage({ user }: Props) {
               step="0.1"
               value={brew.water_temp}
               onChange={(e) => setBrew({ ...brew, water_temp: e.target.value })}
-              placeholder="leave empty if N/A"
+              placeholder={t('brew.placeholder.naAllowed')}
+            />
+          </div>
+
+          <div className="sm:col-span-2">
+            <label className="block text-xs font-medium text-gray-500 mb-1">{t('brew.field.grindMedianUm')}</label>
+            <input
+              className="w-full p-2 border rounded-lg"
+              type="number"
+              step="1"
+              value={brew.grind_median_um}
+              onChange={(e) => setBrew({ ...brew, grind_median_um: e.target.value })}
+              placeholder={t('brew.placeholder.naAllowed')}
             />
           </div>
         </div>
 
         <div>
-          <label className="block text-xs font-medium text-gray-500 mb-1">Recipe (plain text)</label>
+          <label className="block text-xs font-medium text-gray-500 mb-1">{t('brew.field.recipe')}</label>
           <textarea
             className="w-full p-2 border rounded-lg min-h-24"
             value={brew.recipe}
             onChange={(e) => setBrew({ ...brew, recipe: e.target.value })}
-            placeholder="e.g. V60: 15g coffee, 250g water, 30s bloom, 2 pours…"
+            placeholder={t('brew.placeholder.recipe')}
           />
         </div>
 
         <div className="grid grid-cols-1 gap-4">
           <FlavorWheelPicker
-            label="Cup notes (SCA flavor wheel)"
-            value={brew.cup_flavor_notes}
-            onChange={(next) => setBrew({ ...brew, cup_flavor_notes: next })}
-          />
-          <FlavorWheelPicker
-            label="Taste notes (SCA flavor wheel)"
+            label={t('brew.field.tasteNotesSca')}
             value={brew.taste_flavor_notes}
             onChange={(next) => setBrew({ ...brew, taste_flavor_notes: next })}
           />
@@ -344,21 +547,21 @@ export function NewBrewPage({ user }: Props) {
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">Extraction note</label>
+            <label className="block text-xs font-medium text-gray-500 mb-1">{t('brew.field.extractionNote')}</label>
             <textarea
               className="w-full p-2 border rounded-lg min-h-24"
               value={brew.extraction_note}
               onChange={(e) => setBrew({ ...brew, extraction_note: e.target.value })}
-              placeholder="channeling? fast? slow? grind changes?"
+              placeholder={t('brew.placeholder.extractionNote')}
             />
           </div>
           <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">Taste note (free text)</label>
+            <label className="block text-xs font-medium text-gray-500 mb-1">{t('brew.field.tasteNoteFreeText')}</label>
             <textarea
               className="w-full p-2 border rounded-lg min-h-24"
               value={brew.taste_note}
               onChange={(e) => setBrew({ ...brew, taste_note: e.target.value })}
-              placeholder="overall impression, aftertaste, sweetness, acidity…"
+              placeholder={t('brew.placeholder.tasteNoteFreeText')}
             />
           </div>
         </div>
@@ -372,7 +575,7 @@ export function NewBrewPage({ user }: Props) {
           onClick={save}
           disabled={saving}
         >
-          {saving ? 'Saving…' : 'Save brew'}
+          {saving ? t('newBrew.save.saving') : t('newBrew.save')}
         </button>
       </div>
     </div>

@@ -1,11 +1,22 @@
 -- Patch for existing Supabase DBs created before 2026-02-06
 -- Adds:
 -- - beans.bean_name
+-- - beans.cup_flavor_notes
+-- - beans.origin_location / beans.origin_country
 -- - grinders table
 -- - brews.grinder_uid foreign key
 
 alter table if exists public.beans
   add column if not exists bean_name text;
+
+alter table if exists public.beans
+  add column if not exists cup_flavor_notes jsonb not null default '[]'::jsonb;
+
+alter table if exists public.beans
+  add column if not exists origin_location text;
+
+alter table if exists public.beans
+  add column if not exists origin_country text;
 
 create table if not exists public.grinders (
   uid uuid primary key,

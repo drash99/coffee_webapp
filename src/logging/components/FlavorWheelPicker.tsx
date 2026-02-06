@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { FlavorNote } from '../types';
 import { getNodeByPath, getTopLevelColor, SCA_FLAVOR_WHEEL } from '../scaFlavorWheel';
+import { useI18n } from '../../i18n/I18nProvider';
 
 type Props = {
   label: string;
@@ -14,6 +15,7 @@ function noteKey(note: FlavorNote): string {
 }
 
 export function FlavorWheelPicker({ label, value, onChange, maxNotes = 5 }: Props) {
+  const { t } = useI18n();
   const topLevel = value;
 
   const canAddMore = topLevel.length < maxNotes;
@@ -180,7 +182,7 @@ export function FlavorWheelPicker({ label, value, onChange, maxNotes = 5 }: Prop
             resetLower(1);
           }}
           options={level1DotOptions}
-          placeholder="Select (broad)"
+          placeholder={t('flavorPicker.placeholder.broad')}
           disabled={!canAddMore}
         />
 
@@ -191,7 +193,7 @@ export function FlavorWheelPicker({ label, value, onChange, maxNotes = 5 }: Prop
             resetLower(2);
           }}
           options={level2DotOptions}
-          placeholder={l1 ? 'Select (narrow)' : '—'}
+          placeholder={l1 ? t('flavorPicker.placeholder.narrow') : t('flavorPicker.placeholder.none')}
           disabled={!canAddMore || !l1 || l1 === 'N/A' || level2DotOptions.length === 0}
         />
 
@@ -199,7 +201,7 @@ export function FlavorWheelPicker({ label, value, onChange, maxNotes = 5 }: Prop
           value={l3}
           onChange={(v) => setL3(v)}
           options={level3DotOptions}
-          placeholder={l2 ? 'Select (specific)' : '—'}
+          placeholder={l2 ? t('flavorPicker.placeholder.specific') : t('flavorPicker.placeholder.none')}
           disabled={!canAddMore || !l2 || level3DotOptions.length === 0}
         />
       </div>
@@ -211,10 +213,10 @@ export function FlavorWheelPicker({ label, value, onChange, maxNotes = 5 }: Prop
           onClick={addCurrent}
           disabled={!canAddMore || !l1}
         >
-          Add note
+          {t('flavorPicker.addNote')}
         </button>
         <div className="text-xs text-gray-500">
-          Tip: you can add just broad notes (level 1), or narrow down further.
+          {t('flavorPicker.tip')}
         </div>
       </div>
 
@@ -226,7 +228,7 @@ export function FlavorWheelPicker({ label, value, onChange, maxNotes = 5 }: Prop
               type="button"
               onClick={() => remove(note)}
               className="flex items-center gap-2 px-3 py-1 rounded-full border bg-white text-sm hover:bg-gray-50"
-              title="Click to remove"
+              title={t('flavorPicker.removeTitle')}
             >
               <span className="inline-block w-2 h-2 rounded-full" style={{ backgroundColor: note.color }} />
               <span className="text-gray-800">{note.path.join(' / ')}</span>
