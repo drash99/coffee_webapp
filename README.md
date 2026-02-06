@@ -14,13 +14,14 @@ A zero-cost, local-first Progressive Web App (PWA) for specialty coffee analytic
     *   **Color/Gamma Calibration** via 11-step grayscale ramp LUTs
     *   **White Balance** using CMYK patches (for bean mode)
     *   **Dual Analysis Modes:**
-        - **Grind Analysis:** DoG filtering for fine particles (1px+), size distribution in micrometers
+        - **Grind (Particle) Analysis:** Contrast+sharpen + thresholding + connected components for fine particles, size distribution in micrometers
         - **Bean Analysis:** Ellipse fitting for whole beans, size + roast level (lightness)
+    *   **Stage handling:** 100mm × 100mm square stage with a conservative 10mm inward crop (80mm × 80mm analyzed)
 
 ### 2. Computer Vision Tools
 *   **Calibration Sheet Generator:** `generate_calibration_sheet.py`
     *   Generates a precise PDF target (Letter size).
-    *   Features: ArUco Markers (IDs 0-3), CMYK + 11-step Grayscale Ramp, 10mm Distortion Grid, 10cm Verification Scale.
+    *   Features: ArUco Markers (IDs 0-3), CMYK + 11-step Grayscale Ramp, 10mm Distortion Grid (excludes stage), 10cm Verification Scale, and a 100mm × 100mm stage box.
 *   **Python CV Prototypes:**
     *   `test_cv.py` - Grind particle analysis with DoG filtering
     *   `test_bean_cv.py` - Bean size and roast color analysis
@@ -30,6 +31,7 @@ A zero-cost, local-first Progressive Web App (PWA) for specialty coffee analytic
 *   **Color/Gamma:** Uses an 11-step Grayscale ramp (0-100% Black Ink) to build per-channel LUTs, correcting for nonlinear printer response and lighting conditions.
 *   **White Balance:** CMYK patches used to calculate neutral gray correction factors (bean mode only).
 *   **Scale:** Supports user input for "Measured Ruler Length" to correct for physical printing scaling errors.
+*   **Stage (current sheet):** 100mm × 100mm square stage. The web app analyzes the center conservatively (10mm margin).
 
 ### 4. Web App Features
 *   **Image Upload:** Separate buttons for Bean vs. Grind analysis
@@ -53,7 +55,8 @@ A zero-cost, local-first Progressive Web App (PWA) for specialty coffee analytic
 
 ### Phase 2: Advanced Features
 - [ ] **Lens Distortion Correction:** Use the 10mm grid to calculate and apply radial distortion coefficients.
-- [x] **Particle Size Analysis:** ✅ Implemented with DoG filtering (detects 1px+ particles).
+- [x] **Bean Analysis:** ✅ Size + roast color analysis working end-to-end (post-processed preview uses the same pixels used for analysis).
+- [x] **Particle Size Analysis:** ✅ Implemented end-to-end (contrast+sharpen → threshold → connected components).
 - [ ] **Camera Capture:** Add live camera capture UI (instead of file upload) for mobile PWA.
 
 ### Phase 3: Backend & Data
@@ -70,6 +73,13 @@ A zero-cost, local-first Progressive Web App (PWA) for specialty coffee analytic
 pip install reportlab opencv-python Pillow
 python generate_calibration_sheet.py
 # Prints 'calibration_target.pdf'
+```
+
+For **A4 paper**, generate the A4 version (same 180×250mm calibration area, centered on A4):
+
+```bash
+python generate_calibration_sheet_a4.py
+# Prints 'calibration_target_a4.pdf'
 ```
 
 ### Testing CV Logic (Python)

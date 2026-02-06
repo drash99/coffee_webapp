@@ -90,7 +90,8 @@ def draw_calibration_sheet(filename="calibration_target.pdf"):
     grid_step = 10 * mm
     stage_center_x = width / 2
     stage_center_y = height / 2 + 10 * mm
-    stage_radius = 50 * mm + 2 * mm # Add slight margin
+    stage_size = 100 * mm  # 100mm x 100mm square
+    stage_half = stage_size / 2
     
     c.setStrokeColor(colors.lightgrey)
     c.setLineWidth(0.5)
@@ -111,8 +112,9 @@ def draw_calibration_sheet(filename="calibration_target.pdf"):
     # Vertical lines
     x = x_start
     while x <= x_end:
-        # Exclusion Zone 1: Stage Circle
-        dx_stage = x - stage_center_x
+        # Exclusion Zone 1: Stage Square
+        stage_left = stage_center_x - stage_half
+        stage_right = stage_center_x + stage_half
         
         # Exclusion Zone 2: Markers (Top/Bottom corners)
         # Markers are now 15mm
@@ -131,20 +133,20 @@ def draw_calibration_sheet(filename="calibration_target.pdf"):
         # Now handle Stage exclusion for the remaining segments
         final_segments = []
         for (seg_y1, seg_y2) in segments:
-             # Check overlap with stage
-             # For a vertical line x, stage intersection is y_enter, y_exit
-             if abs(dx_stage) < stage_radius:
-                  dy_stage = math.sqrt(stage_radius**2 - dx_stage**2)
-                  y_enter = stage_center_y - dy_stage
-                  y_exit = stage_center_y + dy_stage
+             # Check if vertical line x intersects the stage square
+             if x >= stage_left and x <= stage_right:
+                  # Line intersects stage square - need to exclude the square region
+                  stage_top = stage_center_y - stage_half
+                  stage_bottom = stage_center_y + stage_half
                   
-                  # Segment 1: seg_y1 to y_enter
-                  if seg_y1 < y_enter:
-                      final_segments.append((seg_y1, min(seg_y2, y_enter)))
-                  # Segment 2: y_exit to seg_y2
-                  if seg_y2 > y_exit:
-                      final_segments.append((max(seg_y1, y_exit), seg_y2))
+                  # Segment 1: seg_y1 to stage_top
+                  if seg_y1 < stage_top:
+                      final_segments.append((seg_y1, min(seg_y2, stage_top)))
+                  # Segment 2: stage_bottom to seg_y2
+                  if seg_y2 > stage_bottom:
+                      final_segments.append((max(seg_y1, stage_bottom), seg_y2))
              else:
+                  # Line doesn't intersect stage, keep entire segment
                   final_segments.append((seg_y1, seg_y2))
                   
         for (y1, y2) in final_segments:
@@ -155,8 +157,9 @@ def draw_calibration_sheet(filename="calibration_target.pdf"):
     # Horizontal lines
     y = y_start
     while y <= y_end:
-        # Exclusion 1: Stage
-        dy_stage = y - stage_center_y
+        # Exclusion 1: Stage Square
+        stage_top = stage_center_y - stage_half
+        stage_bottom = stage_center_y + stage_half
         
         # Exclusion 2: Markers (15mm)
         m_sz = 15 * mm
@@ -170,16 +173,20 @@ def draw_calibration_sheet(filename="calibration_target.pdf"):
              
         final_segments = []
         for (seg_x1, seg_x2) in segments:
-             if abs(dy_stage) < stage_radius:
-                  dx_stage = math.sqrt(stage_radius**2 - dy_stage**2)
-                  x_enter = stage_center_x - dx_stage
-                  x_exit = stage_center_x + dx_stage
+             # Check if horizontal line y intersects the stage square
+             if y >= stage_top and y <= stage_bottom:
+                  # Line intersects stage square - need to exclude the square region
+                  stage_left = stage_center_x - stage_half
+                  stage_right = stage_center_x + stage_half
                   
-                  if seg_x1 < x_enter:
-                      final_segments.append((seg_x1, min(seg_x2, x_enter)))
-                  if seg_x2 > x_exit:
-                      final_segments.append((max(seg_x1, x_exit), seg_x2))
+                  # Segment 1: seg_x1 to stage_left
+                  if seg_x1 < stage_left:
+                      final_segments.append((seg_x1, min(seg_x2, stage_left)))
+                  # Segment 2: stage_right to seg_x2
+                  if seg_x2 > stage_right:
+                      final_segments.append((max(seg_x1, stage_right), seg_x2))
              else:
+                  # Line doesn't intersect stage, keep entire segment
                   final_segments.append((seg_x1, seg_x2))
                   
         for (x1, x2) in final_segments:
@@ -272,8 +279,10 @@ def draw_calibration_sheet(filename="calibration_target.pdf"):
     # ---------------------------------------------------------
     c.setStrokeColor(colors.lightgrey)
     c.setLineWidth(2)
-    # Draw a 10cm circle in the middle
-    c.circle(width/2, height/2 + 10*mm, 50*mm, fill=0, stroke=1)
+    # Draw a 100mm x 100mm square in the middle
+    stage_x = stage_center_x - stage_half
+    stage_y = stage_center_y - stage_half
+    c.rect(stage_x, stage_y, stage_size, stage_size, fill=0, stroke=1)
     
     c.setFillColor(colors.gray)
     c.setFont("Helvetica", 14)

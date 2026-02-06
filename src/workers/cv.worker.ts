@@ -28,11 +28,10 @@ const CALIB_CONFIG = {
   CMYK_PATCH_XS_MM: [106, 120, 134, 148],
   STAGE_CENTER_X_MM: 90,
   STAGE_CENTER_Y_MM: 115,
-  STAGE_RADIUS_MM: 50,
-  SCALE: 12  // Higher resolution for better detection
+  STAGE_SIZE_MM: 100,  // 100mm x 100mm square stage
+  STAGE_MARGIN_MM: 10,  // Crop 10mm (1cm) from each edge for conservative analysis
+  SCALE: 18  // Higher resolution for better detection
 };
-
-let isCvReady = false;
 
 /** Wait until OpenCV runtime has exposed Mat (on Module or Module.cv). Emscripten calls onRuntimeInitialized when ready; we also poll in case the callback slot isn't used. */
 async function waitForOpenCvReady(cvObj: any, timeoutMs = 8000): Promise<void> {
@@ -114,7 +113,6 @@ self.onmessage = async (e: MessageEvent<WorkerMessage>) => {
 
         cv = merged;
         (self as any).cv = merged;
-        isCvReady = true;
         // Uncomment to inspect what cv points to (handle in App: if (e.data.type === 'DEBUG') console.log(e.data.payload))
         // postMessage({ type: 'DEBUG', payload: { cvType: typeof cv, hasMat: !!cv?.Mat, matType: typeof cv?.Mat, hasMatFromImageData: !!cv?.matFromImageData, keys: cv ? Object.keys(cv).slice(0, 40) : null } });
         postMessage({ type: 'CV_READY' });
@@ -403,9 +401,10 @@ function processImage(input: { imageData: ImageData, width: number, height: numb
     }
     
     // C+M+Y average for neutral estimate
-    const neutralB = (cmykObserved[0][0] + cmykObserved[1][0] + cmykObserved[2][0]) / 3;
+    // NOTE: `cv.mean()` on our warped RGBA Mat returns channels in R,G,B,(A).
+    const neutralR = (cmykObserved[0][0] + cmykObserved[1][0] + cmykObserved[2][0]) / 3;
     const neutralG = (cmykObserved[0][1] + cmykObserved[1][1] + cmykObserved[2][1]) / 3;
-    const neutralR = (cmykObserved[0][2] + cmykObserved[1][2] + cmykObserved[2][2]) / 3;
+    const neutralB = (cmykObserved[0][2] + cmykObserved[1][2] + cmykObserved[2][2]) / 3;
     
     const targetNeutral = 128.0;
     wbFactors = {
@@ -416,9 +415,13 @@ function processImage(input: { imageData: ImageData, width: number, height: numb
   }
   
   // 5. Stage Analysis
-  const stageX = (CALIB_CONFIG.STAGE_CENTER_X_MM - CALIB_CONFIG.STAGE_RADIUS_MM) * CALIB_CONFIG.SCALE;
-  const stageY = (CALIB_CONFIG.STAGE_CENTER_Y_MM - CALIB_CONFIG.STAGE_RADIUS_MM) * CALIB_CONFIG.SCALE;
-  const stageDim = CALIB_CONFIG.STAGE_RADIUS_MM * 2 * CALIB_CONFIG.SCALE;
+  // Extract ROI with 10mm margin from each edge (conservative crop)
+  // Full stage: 100mm x 100mm, centered at (90mm, 115mm)
+  // With 10mm margin: extract 80mm x 80mm from center
+  const stageHalfSize = (CALIB_CONFIG.STAGE_SIZE_MM / 2) - CALIB_CONFIG.STAGE_MARGIN_MM;
+  const stageX = (CALIB_CONFIG.STAGE_CENTER_X_MM - stageHalfSize) * CALIB_CONFIG.SCALE;
+  const stageY = (CALIB_CONFIG.STAGE_CENTER_Y_MM - stageHalfSize) * CALIB_CONFIG.SCALE;
+  const stageDim = (stageHalfSize * 2) * CALIB_CONFIG.SCALE;
   const stageRoi = warped.roi(new cv.Rect(stageX, stageY, stageDim, stageDim));
   console.log('[CV] Stage ROI extracted, calling', mode === 'grind' ? 'analyzeGrind' : 'analyzeBeans');
 
@@ -461,27 +464,34 @@ function processImage(input: { imageData: ImageData, width: number, height: numb
 
 function analyzeGrind(stageRoi: any, luts: any, scaleCorrection: number) {
   console.log('[CV] analyzeGrind start');
+
+  // Post-process the cropped stage image ONCE (LUT), then use it for:
+  // - detection (contrast + sharpen + threshold)
+  // - outline preview
+  const stageProc = stageRoi.clone();
+  applyLutToMatRGBA(stageProc, luts);
+
   const gray = new cv.Mat();
-  cv.cvtColor(stageRoi, gray, cv.COLOR_RGBA2GRAY);
+  cv.cvtColor(stageProc, gray, cv.COLOR_RGBA2GRAY);
 
-  const grayDn = new cv.Mat();
-  cv.bilateralFilter(gray, grayDn, 9, 75, 75);
-  console.log('[CV] analyzeGrind: bilateralFilter done');
+  // Make tiny particles behave like "black dots":
+  // 1) increase contrast, 2) sharpen, then threshold (black -> white foreground).
+  const grayContrast = new cv.Mat();
+  // alpha: contrast gain, beta: brightness shift (tweakable)
+  cv.convertScaleAbs(gray, grayContrast, 2.2, -40);
 
-  const bg = new cv.Mat();
-  cv.GaussianBlur(grayDn, bg, new cv.Size(0, 0), 25);
-  const hp = new cv.Mat();
-  cv.subtract(bg, grayDn, hp);
-
-  const g1 = new cv.Mat(), g2 = new cv.Mat();
-  cv.GaussianBlur(hp, g1, new cv.Size(0, 0), 0.8);
-  cv.GaussianBlur(hp, g2, new cv.Size(0, 0), 1.6);
-  const dog = new cv.Mat();
-  cv.subtract(g1, g2, dog);
-  cv.normalize(dog, dog, 0, 255, cv.NORM_MINMAX);
+  const graySharp = new cv.Mat();
+  const k = matFromArrayF32Safe(3, 3, cv.CV_32F, [
+     0, -1,  0,
+    -1,  5, -1,
+     0, -1,  0
+  ]);
+  cv.filter2D(grayContrast, graySharp, cv.CV_8U, k);
+  k.delete();
 
   const bw = new cv.Mat();
-  cv.threshold(dog, bw, 42, 255, cv.THRESH_BINARY);
+  // Otsu auto-threshold. Invert so dark particles become white foreground.
+  cv.threshold(graySharp, bw, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU);
 
   const mask = matZerosSafe(bw.rows, bw.cols, cv.CV_8UC1);
   const r = Math.floor(Math.min(bw.rows, bw.cols) * 0.48);
@@ -494,7 +504,7 @@ function analyzeGrind(stageRoi: any, luts: any, scaleCorrection: number) {
   const centroids = new cv.Mat();
   const num = cv.connectedComponentsWithStats(bw, labels, stats, centroids, 8);
 
-  const minAreaPx = 1;
+  const minAreaPx = 3;
   const maxAreaPx = (bw.rows * bw.cols) * 0.12;
   console.log('[CV] analyzeGrind: components', num, 'filter area', minAreaPx, '-', Math.round(maxAreaPx), 'px');
 
@@ -503,30 +513,15 @@ function analyzeGrind(stageRoi: any, luts: any, scaleCorrection: number) {
     const area = stats.intPtr(i, cv.CC_STAT_AREA)[0];
     if (area < minAreaPx || area > maxAreaPx) continue;
     
-    const cx = centroids.doublePtr(i, 0)[0];
-    const cy = centroids.doublePtr(i, 1)[0];
-    
     // Size estimate
     const majorMm = (Math.sqrt(area / Math.PI) * 2) / CALIB_CONFIG.SCALE * scaleCorrection;
-    
-    // Color (sample small region)
-    const sampleMask = matZerosSafe(stageRoi.rows, stageRoi.cols, cv.CV_8UC1);
-    cv.circle(sampleMask, new cv.Point(cx, cy), 2, new cv.Scalar(255), -1);
-    const meanColor = cv.mean(stageRoi, sampleMask);
-    
-    const r = applyLut(meanColor[2], luts.r);
-    const g = applyLut(meanColor[1], luts.g);
-    const b = applyLut(meanColor[0], luts.b);
-    const luma = 0.299 * r + 0.587 * g + 0.114 * b;
-    
+
+    // No color info in grind particles (by request) — just geometry.
     particles.push({
       majorMm,
       minorMm: majorMm,
-      areaPx: area,
-      r, g, b, luma
+      areaPx: area
     });
-    
-    sampleMask.delete();
   }
 
   console.log('[CV] analyzeGrind done, particles:', particles.length);
@@ -534,44 +529,87 @@ function analyzeGrind(stageRoi: any, luts: any, scaleCorrection: number) {
   const visContours = new cv.MatVector();
   const visHierarchy = new cv.Mat();
   cv.findContours(bw, visContours, visHierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
-  const vis = stageRoi.clone();
-  const green = new cv.Scalar(0, 255, 0);
+  const vis = stageProc.clone();
+  // IMPORTANT: stage ROI is 4-channel; include alpha=255 so outlines are visible in the preview.
+  // Use a small palette so you can visually confirm 1 contour ↔ 1 particle.
+  const contourColors = [
+    new cv.Scalar(0, 255, 0, 255),   // Green
+    new cv.Scalar(0, 0, 255, 255),   // Red
+    new cv.Scalar(255, 0, 0, 255),   // Blue
+    new cv.Scalar(0, 255, 255, 255)  // Yellow
+  ];
   for (let i = 0; i < visContours.size(); i++) {
     const cnt = visContours.get(i);
     const a = cv.contourArea(cnt);
-    if (a >= minAreaPx && a <= maxAreaPx) cv.drawContours(vis, visContours, i, green, 2);
+    if (a >= minAreaPx && a <= maxAreaPx) {
+      const color = contourColors[i % contourColors.length];
+      cv.drawContours(vis, visContours, i, color, 2);
+    }
   }
   const stageImageData = { data: Array.from(vis.data), width: vis.cols, height: vis.rows };
   vis.delete(); visContours.delete(); visHierarchy.delete();
 
-  gray.delete(); grayDn.delete(); bg.delete(); hp.delete(); g1.delete(); g2.delete();
-  dog.delete(); bw.delete(); mask.delete(); labels.delete(); stats.delete(); centroids.delete();
+  gray.delete(); grayContrast.delete(); graySharp.delete();
+  bw.delete(); mask.delete(); labels.delete(); stats.delete(); centroids.delete();
+  stageProc.delete();
 
   return { mode: 'grind', particles, stageImageData };
 }
 
+/** Apply white balance factors to an RGBA Mat in place (channel order R,G,B,A). */
+function applyWhiteBalanceToMatRGBA(mat: any, wbFactors: { r: number; g: number; b: number }) {
+  const data = mat.data;
+  const len = mat.rows * mat.cols * 4;
+  for (let i = 0; i < len; i += 4) {
+    data[i] = Math.min(255, Math.max(0, Math.round(data[i] * wbFactors.r)));         // R
+    data[i + 1] = Math.min(255, Math.max(0, Math.round(data[i + 1] * wbFactors.g))); // G
+    data[i + 2] = Math.min(255, Math.max(0, Math.round(data[i + 2] * wbFactors.b))); // B
+    // A channel unchanged
+  }
+}
+
 function analyzeBeans(stageRoi: any, luts: any, wbFactors: any, scaleCorrection: number) {
   console.log('[CV] analyzeBeans start');
-  const gray = new cv.Mat();
-  cv.cvtColor(stageRoi, gray, cv.COLOR_RGBA2GRAY);
 
-  cv.GaussianBlur(gray, gray, new cv.Size(5, 5), 0);
+  // Post-process the cropped stage image ONCE, then use it for:
+  // - segmentation (thresholding/contours)
+  // - per-bean color measurement
+  // - outline preview
+  const stageProc = stageRoi.clone();
+  applyLutToMatRGBA(stageProc, luts);
+  applyWhiteBalanceToMatRGBA(stageProc, wbFactors);
+
+  const gray = new cv.Mat();
+  cv.cvtColor(stageProc, gray, cv.COLOR_RGBA2GRAY);
+
+  // Denoise first
+  const grayBlurred = new cv.Mat();
+  cv.GaussianBlur(gray, grayBlurred, new cv.Size(5, 5), 0);
+  
+  // Background removal - use larger sigma to better smooth out grid patterns
   const bg = new cv.Mat();
-  cv.GaussianBlur(gray, bg, new cv.Size(0, 0), 30);
+  cv.GaussianBlur(grayBlurred, bg, new cv.Size(0, 0), 40); // Increased from 30 to 40 to better remove grid
   const diff = new cv.Mat();
-  cv.subtract(bg, gray, diff);
+  cv.subtract(bg, grayBlurred, diff);
   cv.normalize(diff, diff, 0, 255, cv.NORM_MINMAX);
 
+  // Higher threshold to avoid detecting grid lines (was 15, now 25)
   const bw = new cv.Mat();
-  cv.threshold(diff, bw, 15, 255, cv.THRESH_BINARY);
+  cv.threshold(diff, bw, 25, 255, cv.THRESH_BINARY);
 
-  const kernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(5, 5));
-  cv.morphologyEx(bw, bw, cv.MORPH_CLOSE, kernel, new cv.Point(-1, -1), 2);
+  // Morphological operations - use smaller kernel and fewer iterations to avoid connecting grid lines
+  const kernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(3, 3)); // Smaller kernel (was 5x5)
+  // Close to fill small gaps in beans, but fewer iterations
+  cv.morphologyEx(bw, bw, cv.MORPH_CLOSE, kernel, new cv.Point(-1, -1), 1); // Reduced from 2 to 1
+  // Open to remove small noise
   cv.morphologyEx(bw, bw, cv.MORPH_OPEN, kernel, new cv.Point(-1, -1), 1);
 
+  // Apply rectangular mask (stage is already cropped with 10mm margin, so use full ROI with small safety margin)
+  const marginPx = Math.floor(2 * CALIB_CONFIG.SCALE); // 2mm safety margin to avoid edge artifacts
   const mask = matZerosSafe(bw.rows, bw.cols, cv.CV_8UC1);
-  const r = Math.floor(Math.min(bw.rows, bw.cols) * 0.48);
-  cv.circle(mask, new cv.Point(bw.cols / 2, bw.rows / 2), r, new cv.Scalar(255), -1);
+  const topLeft = new cv.Point(marginPx, marginPx);
+  const bottomRight = new cv.Point(bw.cols - marginPx, bw.rows - marginPx);
+  cv.rectangle(mask, topLeft, bottomRight, new cv.Scalar(255), -1);
   cv.bitwise_and(bw, bw, bw, mask);
 
   console.log('[CV] analyzeBeans: findContours');
@@ -593,21 +631,26 @@ function analyzeBeans(stageRoi: any, luts: any, wbFactors: any, scaleCorrection:
       const ellipse = cv.fitEllipse(cnt);
       const MA = ellipse.size.width;
       const ma = ellipse.size.height;
+      
+      // Filter out long thin shapes (grid lines) - beans should be roughly circular/elliptical
+      // Aspect ratio: major/minor should be reasonable for beans (typically < 2.5)
+      const aspectRatio = Math.max(MA, ma) / (Math.min(MA, ma) || 1);
+      if (aspectRatio > 3.0) {
+        console.log('[CV] analyzeBeans: filtered contour with aspect ratio', aspectRatio.toFixed(2));
+        continue; // Skip grid lines and other elongated shapes
+      }
+      
       const majorMm = Math.max(MA, ma) / CALIB_CONFIG.SCALE * scaleCorrection;
       const minorMm = Math.min(MA, ma) / CALIB_CONFIG.SCALE * scaleCorrection;
       
       const beanMask = matZerosSafe(stageRoi.rows, stageRoi.cols, cv.CV_8UC1);
       cv.drawContours(beanMask, contours, i, new cv.Scalar(255), -1);
-      const meanColor = cv.mean(stageRoi, beanMask);
+      const meanColor = cv.mean(stageProc, beanMask);
       
-      let r = applyLut(meanColor[2], luts.r);
-      let g = applyLut(meanColor[1], luts.g);
-      let b = applyLut(meanColor[0], luts.b);
-      
-      // Apply WB
-      r = Math.min(255, Math.max(0, r * wbFactors.r));
-      g = Math.min(255, Math.max(0, g * wbFactors.g));
-      b = Math.min(255, Math.max(0, b * wbFactors.b));
+      // stageProc is already LUT + WB corrected; meanColor channels are R,G,B,(A).
+      const r = Math.min(255, Math.max(0, meanColor[0]));
+      const g = Math.min(255, Math.max(0, meanColor[1]));
+      const b = Math.min(255, Math.max(0, meanColor[2]));
       
       const luma = 0.299 * r + 0.587 * g + 0.114 * b;
       
@@ -618,17 +661,19 @@ function analyzeBeans(stageRoi: any, luts: any, wbFactors: any, scaleCorrection:
 
   console.log('[CV] analyzeBeans done, beans:', beans.length);
 
-  const vis = stageRoi.clone();
-  const green = new cv.Scalar(0, 255, 0);
+  // Draw bean outlines on the post-processed image (preview == analyzed pixels)
+  // IMPORTANT: stageProc is RGBA; include alpha=255 so outlines are visible in the preview.
+  const green = new cv.Scalar(0, 255, 0, 255);
   for (let i = 0; i < nContours; i++) {
     const cnt = contours.get(i);
-    if (cv.contourArea(cnt) >= minArea && cnt.rows >= 5) cv.drawContours(vis, contours, i, green, 2);
+    if (cv.contourArea(cnt) >= minArea && cnt.rows >= 5) cv.drawContours(stageProc, contours, i, green, 4);
+    console.log('[CV] analyzeBeans: contour', i, 'area', cv.contourArea(cnt), 'x', cnt.data32F[0], 'y', cnt.data32F[1]);
   }
-  const stageImageData = { data: Array.from(vis.data), width: vis.cols, height: vis.rows };
-  vis.delete();
+  const stageImageData = { data: Array.from(stageProc.data), width: stageProc.cols, height: stageProc.rows };
 
-  gray.delete(); bg.delete(); diff.delete(); bw.delete(); kernel.delete();
+  gray.delete(); grayBlurred.delete(); bg.delete(); diff.delete(); bw.delete(); kernel.delete();
   mask.delete(); contours.delete(); hierarchy.delete();
+  stageProc.delete();
 
   return { mode: 'bean', beans, stageImageData };
 }
@@ -654,11 +699,6 @@ function buildLut(observed: number[], expected: number[]): Uint8Array {
     }
   }
   return lut;
-}
-
-function applyLut(val: number, lut: Uint8Array): number {
-  const idx = Math.max(0, Math.min(255, Math.round(val)));
-  return lut[idx];
 }
 
 /** Apply R/G/B LUTs to an RGBA Mat in place (channel order R,G,B,A). Used for debug warped image. */
