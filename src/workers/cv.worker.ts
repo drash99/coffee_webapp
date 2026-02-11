@@ -511,63 +511,157 @@ function analyzeGrind(stageRoi: any, luts: any, scaleCorrection: number) {
   cv.circle(mask, new cv.Point(bw.cols / 2, bw.rows / 2), r, new cv.Scalar(255), -1);
   cv.bitwise_and(bw, bw, bw, mask);
 
-  console.log('[CV] analyzeGrind: connectedComponentsWithStats');
-  const labels = new cv.Mat();
-  const stats = new cv.Mat();
-  const centroids = new cv.Mat();
-  const num = cv.connectedComponentsWithStats(bw, labels, stats, centroids, 8);
-
-  const minAreaPx = 10; // Catch small particles
+  console.log('[CV] analyzeGrind: findContours');
+  const contours = new cv.MatVector();
+  const hierarchy = new cv.Mat();
+  cv.findContours(bw, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+  
+  const minAreaPx = 10;
   const maxAreaPx = (bw.rows * bw.cols) * 0.20;
-  console.log('[CV] analyzeGrind: components', num, 'filter area', minAreaPx, '-', Math.round(maxAreaPx), 'px');
+  const pixelScale = CALIB_CONFIG.SCALE / scaleCorrection; // pixels per mm
 
   const particles: any[] = [];
-  for (let i = 1; i < num; i++) {
-    const area = stats.intPtr(i, cv.CC_STAT_AREA)[0];
-    if (area < minAreaPx || area > maxAreaPx) continue;
-    
-    // Size estimate
-    const majorMm = (Math.sqrt(area / Math.PI) * 2) / CALIB_CONFIG.SCALE * scaleCorrection;
-
-    // Filter clumps (aggregated particles) from statistics
-    // Typical grind is < 2mm. Anything > 3.0mm is likely a clump/chaff.
-    if (majorMm > 3.0) continue; 
-
-    particles.push({
-      majorMm,
-      minorMm: majorMm,
-      areaPx: area
-    });
-  }
-
-  console.log('[CV] analyzeGrind done, particles:', particles.length);
-
-  const visContours = new cv.MatVector();
-  const visHierarchy = new cv.Mat();
-  cv.findContours(bw, visContours, visHierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
-  const vis = stageProc.clone();
-  // IMPORTANT: stage ROI is 4-channel; include alpha=255 so outlines are visible in the preview.
   const contourColors = [
     new cv.Scalar(0, 255, 0, 255),   // Green
     new cv.Scalar(0, 0, 255, 255),   // Red
     new cv.Scalar(255, 0, 0, 255),   // Blue
     new cv.Scalar(0, 255, 255, 255)  // Yellow
   ];
-  for (let i = 0; i < visContours.size(); i++) {
-    const cnt = visContours.get(i);
-    const a = cv.contourArea(cnt);
-    // if (a >= minAreaPx && a <= maxAreaPx) {
-      const color = contourColors[i % contourColors.length];
-      cv.drawContours(vis, visContours, i, color, 1); // thinner line
-    // }
+  const vis = stageProc.clone();
+
+  for (let i = 0; i < contours.size(); i++) {
+    const cnt = contours.get(i);
+    const area = cv.contourArea(cnt);
+    
+    if (area < minAreaPx || area > maxAreaPx) continue;
+    if (cnt.rows < 5) continue; // Need 5 points for fitEllipse
+
+    const ellipse = cv.fitEllipse(cnt);
+    const MA = Math.max(ellipse.size.width, ellipse.size.height);
+    const ma = Math.min(ellipse.size.width, ellipse.size.height);
+    
+    const majorMm = MA / pixelScale;
+    const minorMm = ma / pixelScale;
+    
+    // Filter clumps
+    if (majorMm > 3.0) continue;
+
+    // Calculate Surface and Volume (ellipsoid approximation)
+    // Surface (projected) in mm^2
+    const surfaceMm2 = area / (pixelScale * pixelScale);
+    
+    // Volume in mm^3. Assume 3rd axis = minor axis (oblate spheroid) or calculate like python script
+    // Python script: short_axis = surface/(pi * axis) -> volume = pi * short_axis^2 * axis
+    // Our surfaceMm2 is the projected area. 
+    // Python script logic: short_axis = surface / (pi * long_axis). 
+    // Wait, area of ellipse = pi * a * b. so b = Area / (pi * a). 
+    // So minorMm (calculated from area) = surfaceMm2 / (Math.PI * (majorMm / 2)) * 2?
+    // Let's stick to fitEllipse minor axis if available, or use area-based if fit is bad.
+    // The python script derives short axis from surface area to ensure consistency.
+    // Let's use the Python script method for volume to match its logic.
+    // axis = majorMm / 2 (semi-major) ? No, script says "axis" is diameter.
+    // "axis = np.max(dlist)" -> diameter.
+    // "short_axis = surface/(np.pi*axis)". Area = pi * (L/2) * (S/2) = pi/4 * L * S.
+    // So S = 4 * Area / (pi * L). 
+    // The script uses: short_axis = surface / (pi * axis) -> this implies Area = pi * L * S? 
+    // No, maybe axis is semi-major? 
+    // "dlist = np.sqrt(...); axis = np.max(dlist)" -> dlist is dist from centroid. So axis is Radius (Semi-major).
+    // So Area = pi * axis * short_axis (semi-minor). Correct.
+    // So short_axis = Area / (pi * axis).
+    // Volume = 4/3 * pi * axis * short_axis^2 (if ellipsoid with 2 short axes).
+    // The script says: "volume = np.pi*short_axis**2*axis". 
+    // If axis is semi-major (a) and short_axis is semi-minor (b=c).
+    // Vol = 4/3 * pi * a * b * c = 4/3 * pi * a * b^2.
+    // The script uses just pi * ... maybe omitting 4/3? Or assuming something else.
+    // I will use standard ellipsoid volume: 4/3 * pi * (major/2) * (minor/2)^2.
+    
+    const volMm3 = (4/3) * Math.PI * (majorMm/2) * Math.pow(minorMm/2, 2);
+
+    // Calculate Available Mass and Extraction Yield
+    const attainableVol = calculateAttainableVolume(volMm3, majorMm/2, minorMm/2);
+    const ey = calculateExtractionYield(surfaceMm2);
+
+    particles.push({
+      majorMm,
+      minorMm,
+      areaPx: area,
+      surfaceMm2,
+      volMm3,
+      attainableVol, // proportional to available mass (assuming constant density)
+      ey // extraction yield
+    });
+
+    // Draw contour
+    const color = contourColors[i % contourColors.length];
+    cv.drawContours(vis, contours, i, color, 1);
   }
+
+  // Filter outliers: Discard particles in high-end bins with very few counts.
+  // 1. Build a temporary histogram of majorMm (0.1mm bins)
+  const binSize = 0.1;
+  const maxVal = Math.max(...particles.map(p => p.majorMm));
+  const numBins = Math.ceil(maxVal / binSize) + 1;
+  const counts = new Array(numBins).fill(0);
+  
+  for (const p of particles) {
+    const bin = Math.floor(p.majorMm / binSize);
+    counts[bin]++;
+  }
+
+  // 2. Find the cut-off threshold
+  // We look from the right (largest bins) towards the left.
+  // If a bin has very few particles (e.g. < 3) and is far from the main mode, it's likely noise.
+  // However, we must be careful not to cut the main distribution if it's wide.
+  // Strategy: Find the peak (mode). Then from the far right, find the first bin that has significant data.
+  // Everything to the right of that "significant" bin is considered outlier noise if it's sparse.
+  
+  const peakBin = counts.indexOf(Math.max(...counts));
+  let cutOffMm = 3.0; // Default hard limit
+
+  // Start from the end, find first bin with >= 3 particles (arbitrary small number to filter single/double noise)
+  // But we only cut if we are to the right of the peak.
+  for (let i = numBins - 1; i > peakBin; i--) {
+    if (counts[i] >= 3) {
+      // Found significant data. The cut-off is the end of this bin.
+      cutOffMm = (i + 1) * binSize;
+      break;
+    }
+  }
+  
+  // Apply filtering
+  const filteredParticles = particles.filter(p => p.majorMm <= cutOffMm);
+  console.log(`[CV] Outlier filtering: cut-off ${cutOffMm.toFixed(2)}mm. Removed ${particles.length - filteredParticles.length} particles.`);
+
   const stageImageData = { data: Array.from(vis.data), width: vis.cols, height: vis.rows };
   
-  vis.delete(); visContours.delete(); visHierarchy.delete();
-  gray.delete(); graySmooth.delete(); graySharp.delete(); grayContrast.delete(); bw.delete(); mask.delete(); labels.delete(); stats.delete(); centroids.delete();
+  vis.delete(); contours.delete(); hierarchy.delete();
+  gray.delete(); graySmooth.delete(); graySharp.delete(); grayContrast.delete(); bw.delete(); mask.delete();
+  // labels.delete(); stats.delete(); centroids.delete(); // No longer used
   stageProc.delete();
 
-  return { mode: 'grind', particles, stageImageData };
+  return { mode: 'grind', particles: filteredParticles, stageImageData };
+}
+
+// Based on Jonathan Gagné's research
+function calculateAttainableVolume(totalVolume: number, semiMajor: number, semiMinor: number): number {
+  const depthLimit = 0.1; // mm
+  // Equivalent radius of a sphere with same volume
+  const r_eq = Math.pow((3/4 * totalVolume / Math.PI), 1/3);
+  
+  if (r_eq <= depthLimit) {
+    return totalVolume;
+  }
+  
+  // Unreachable volume (core sphere)
+  const unreachable = (4/3) * Math.PI * Math.pow(r_eq - depthLimit, 3);
+  return Math.max(0, totalVolume - unreachable);
+}
+
+function calculateExtractionYield(surfaceMm2: number): number {
+  const k_reference = 0.25014;
+  const extraction_limit = 0.3; // 30%
+  const extraction_speed = 1.0 / surfaceMm2;
+  return (extraction_speed / (k_reference + extraction_speed)) * extraction_limit;
 }
 
 /** Apply white balance factors to an RGBA Mat in place (channel order R,G,B,A). */

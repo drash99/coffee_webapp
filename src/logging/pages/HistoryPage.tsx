@@ -3,6 +3,8 @@ import type { AppUser } from '../../auth/types';
 import { getSupabaseClient } from '../../config/supabase';
 import type { BeanRow, BrewRow, FlavorNote, GrinderRow } from '../types';
 import { useI18n } from '../../i18n/I18nProvider';
+import { AutocompleteInput } from '../components/AutocompleteInput';
+import { FlavorWheelPicker } from '../components/FlavorWheelPicker';
 
 type Props = {
   user: AppUser;
@@ -45,14 +47,125 @@ function NoteDotsList({ notes, emptyLabel }: { notes: FlavorNote[] | null | unde
   );
 }
 
+interface Filters {
+  roastery: string;
+  country: string;
+  location: string;
+  producer: string;
+  varietal: string;
+  cupNotes: FlavorNote[];
+  tasteNotes: FlavorNote[];
+  grinderMaker: string;
+  grinderModel: string;
+}
+
+const emptyFilters: Filters = {
+  roastery: '',
+  country: '',
+  location: '',
+  producer: '',
+  varietal: '',
+  cupNotes: [],
+  tasteNotes: [],
+  grinderMaker: '',
+  grinderModel: '',
+};
+
+/** Deduplicate strings (case-insensitive), keep first casing, sort alphabetically. */
+function unique(values: string[]): string[] {
+  const map = new Map<string, string>();
+  for (const v of values) {
+    if (!v) continue;
+    const key = v.toLowerCase();
+    if (!map.has(key)) map.set(key, v);
+  }
+  return Array.from(map.values()).sort((a, b) =>
+    a.localeCompare(b, undefined, { sensitivity: 'base' })
+  );
+}
+
+function matchesFilter(value: string | null | undefined, filter: string): boolean {
+  if (!filter.trim()) return true;
+  return (value ?? '').toLowerCase().includes(filter.toLowerCase().trim());
+}
+
+/**
+ * Hierarchical prefix matching for flavor notes.
+ * If the filter note path is ["Sweet"], it matches any note starting with "Sweet":
+ *   ["Sweet"], ["Sweet","Honey"], ["Sweet","Brown Sugar","Caramel"], etc.
+ * If the filter is ["Sweet","Honey"], it matches ["Sweet","Honey"] exactly (2 levels).
+ */
+function noteMatchesFilter(brewNote: FlavorNote, filterNote: FlavorNote): boolean {
+  const fp = filterNote.path;
+  const bp = brewNote.path;
+  if (fp.length > bp.length) return false;
+  return fp.every((seg, i) => seg === bp[i]);
+}
+
 export function HistoryPage({ user }: Props) {
   const { t } = useI18n();
   const [rows, setRows] = useState<BrewWithBean[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedUid, setSelectedUid] = useState<string | null>(null);
+  const [filters, setFilters] = useState<Filters>(emptyFilters);
+  const [showFilters, setShowFilters] = useState(false);
 
   const selected = useMemo(() => rows.find((r) => r.uid === selectedUid) ?? null, [rows, selectedUid]);
+
+  // --- Derive suggestion lists from ALL loaded rows ---
+  const suggestions = useMemo(() => {
+    const roasteries = unique(rows.map(r => (r.beans?.roastery ?? '').trim()));
+    const countries = unique(rows.map(r => (r.beans?.origin_country ?? '').trim()));
+    const locations = unique(rows.map(r => (r.beans?.origin_location ?? '').trim()));
+    const producers = unique(rows.map(r => (r.beans?.producer ?? '').trim()));
+    const varietals = unique(rows.map(r => (r.beans?.varietal ?? '').trim()));
+
+    const grinderMakers = unique(rows.map(r => (r.grinders?.maker ?? '').trim()));
+    const grinderModels = unique(rows.map(r => (r.grinders?.model ?? '').trim()));
+
+    return { roasteries, countries, locations, producers, varietals, grinderMakers, grinderModels };
+  }, [rows]);
+
+  // --- Apply filters ---
+  const filteredRows = useMemo(() => {
+    return rows.filter(r => {
+      if (!matchesFilter(r.beans?.roastery, filters.roastery)) return false;
+      if (!matchesFilter(r.beans?.origin_country, filters.country)) return false;
+      if (!matchesFilter(r.beans?.origin_location, filters.location)) return false;
+      if (!matchesFilter(r.beans?.producer, filters.producer)) return false;
+      if (!matchesFilter(r.beans?.varietal, filters.varietal)) return false;
+      if (!matchesFilter(r.grinders?.maker, filters.grinderMaker)) return false;
+      if (!matchesFilter(r.grinders?.model, filters.grinderModel)) return false;
+
+      // Cup notes: hierarchical prefix matching
+      // Selecting "Sweet" matches "Sweet", "Sweet/Honey", "Sweet/Brown Sugar/Caramel", etc.
+      if (filters.cupNotes.length > 0) {
+        const beanNotes = (r.beans?.cup_flavor_notes ?? []) as FlavorNote[];
+        const match = filters.cupNotes.some(fn =>
+          beanNotes.some(bn => noteMatchesFilter(bn, fn))
+        );
+        if (!match) return false;
+      }
+
+      // Taste notes: same hierarchical prefix matching
+      if (filters.tasteNotes.length > 0) {
+        const brewTasteNotes = (r.taste_flavor_notes ?? []) as FlavorNote[];
+        const match = filters.tasteNotes.some(fn =>
+          brewTasteNotes.some(bn => noteMatchesFilter(bn, fn))
+        );
+        if (!match) return false;
+      }
+
+      return true;
+    });
+  }, [rows, filters]);
+
+  const activeFilterCount =
+    Object.entries(filters).reduce((count, [key, v]) => {
+      if (key === 'cupNotes' || key === 'tasteNotes') return count + ((v as FlavorNote[]).length > 0 ? 1 : 0);
+      return count + ((v as string).trim() ? 1 : 0);
+    }, 0);
 
   async function refresh() {
     setError(null);
@@ -106,26 +219,131 @@ export function HistoryPage({ user }: Props) {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold">{t('history.title')}</h2>
-        <button
-          type="button"
-          className="px-3 py-2 rounded-lg border bg-white text-sm hover:bg-gray-50 disabled:bg-gray-100"
-          onClick={refresh}
-          disabled={loading}
-        >
-          {loading ? t('history.refresh.loading') : t('history.refresh')}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            className={`px-3 py-2 rounded-lg border text-sm ${
+              showFilters ? 'bg-amber-50 border-amber-300 text-amber-800' : 'bg-white hover:bg-gray-50'
+            }`}
+            onClick={() => setShowFilters(!showFilters)}
+          >
+            Filter{activeFilterCount > 0 ? ` (${activeFilterCount})` : ''}
+          </button>
+          <button
+            type="button"
+            className="px-3 py-2 rounded-lg border bg-white text-sm hover:bg-gray-50 disabled:bg-gray-100"
+            onClick={refresh}
+            disabled={loading}
+          >
+            {loading ? t('history.refresh.loading') : t('history.refresh')}
+          </button>
+        </div>
       </div>
+
+      {showFilters && (
+        <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="text-sm font-medium text-gray-700">Filters</div>
+            {activeFilterCount > 0 && (
+              <button
+                type="button"
+                className="text-xs text-gray-500 hover:text-gray-800"
+                onClick={() => setFilters(emptyFilters)}
+              >
+                Clear all
+              </button>
+            )}
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">{t('bean.field.roastery')}</label>
+              <AutocompleteInput
+                value={filters.roastery}
+                onChange={(v) => setFilters({ ...filters, roastery: v })}
+                suggestions={suggestions.roasteries}
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">{t('bean.field.originCountry')}</label>
+              <AutocompleteInput
+                value={filters.country}
+                onChange={(v) => setFilters({ ...filters, country: v })}
+                suggestions={suggestions.countries}
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">{t('bean.field.originLocation')}</label>
+              <AutocompleteInput
+                value={filters.location}
+                onChange={(v) => setFilters({ ...filters, location: v })}
+                suggestions={suggestions.locations}
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">{t('bean.field.producer')}</label>
+              <AutocompleteInput
+                value={filters.producer}
+                onChange={(v) => setFilters({ ...filters, producer: v })}
+                suggestions={suggestions.producers}
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">{t('bean.field.varietal')}</label>
+              <AutocompleteInput
+                value={filters.varietal}
+                onChange={(v) => setFilters({ ...filters, varietal: v })}
+                suggestions={suggestions.varietals}
+              />
+            </div>
+            <div className="col-span-2 sm:col-span-4">
+              <FlavorWheelPicker
+                label={t('bean.field.cupNotesSca')}
+                value={filters.cupNotes}
+                onChange={(notes) => setFilters({ ...filters, cupNotes: notes })}
+                maxNotes={10}
+              />
+            </div>
+            <div className="col-span-2 sm:col-span-4">
+              <FlavorWheelPicker
+                label={t('brew.field.tasteNotesSca')}
+                value={filters.tasteNotes}
+                onChange={(notes) => setFilters({ ...filters, tasteNotes: notes })}
+                maxNotes={10}
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">{t('grinder.field.maker')}</label>
+              <AutocompleteInput
+                value={filters.grinderMaker}
+                onChange={(v) => setFilters({ ...filters, grinderMaker: v })}
+                suggestions={suggestions.grinderMakers}
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">{t('grinder.field.model')}</label>
+              <AutocompleteInput
+                value={filters.grinderModel}
+                onChange={(v) => setFilters({ ...filters, grinderModel: v })}
+                suggestions={suggestions.grinderModels}
+              />
+            </div>
+          </div>
+          <div className="text-xs text-gray-500">
+            Showing {filteredRows.length} of {rows.length} brews
+          </div>
+        </div>
+      )}
 
       {error && <div className="text-sm text-red-700 bg-red-50 border border-red-100 rounded-lg p-2">{error}</div>}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
           <div className="px-4 py-3 border-b bg-gray-50 text-sm font-medium text-gray-700">{t('history.list.title')}</div>
-          {rows.length === 0 && !loading ? (
+          {filteredRows.length === 0 && !loading ? (
             <div className="p-4 text-sm text-gray-500">{t('history.empty')}</div>
           ) : (
             <div className="divide-y">
-              {rows.map((r) => {
+              {filteredRows.map((r) => {
                 const beanLabel =
                   r.beans?.bean_name ||
                   r.beans?.roastery ||

@@ -7,6 +7,8 @@ import { ResultsDisplay } from '../components/ResultsDisplay';
 import { useI18n } from '../i18n/I18nProvider';
 import { isSupabaseConfigured, getSupabaseClient } from '../config/supabase';
 import { loadSession } from '../logging/session';
+import { AutocompleteInput } from '../logging/components/AutocompleteInput';
+import { useGrinderSuggestions } from '../logging/hooks/useGrinderSuggestions';
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, BarElement, Title, Tooltip, Legend);
 
@@ -33,6 +35,7 @@ export function AnalysisApp() {
   const [mapMsg, setMapMsg] = useState<string | null>(null);
 
   const user = useMemo(() => loadSession(), []);
+  const { makers, modelsForMaker } = useGrinderSuggestions(user?.uid);
 
   useEffect(() => {
     // Calculate Extraction %: (Yield * TDS) / Dose
@@ -121,24 +124,41 @@ export function AnalysisApp() {
     img.src = url;
   };
 
-  const grindMedianUm = useMemo<number | null>(() => {
+  const grindModeUm = useMemo<number | null>(() => {
     if (analysisMode !== 'grind') return null;
     const particles = analysisResults?.mode === 'grind' ? analysisResults?.particles : null;
     if (!particles || !Array.isArray(particles) || particles.length === 0) return null;
-    const sizes = particles
-      .map((p: any) => Number(p?.majorMm) * 1000)
-      .filter((n: number) => Number.isFinite(n));
+
+    // Compute peak (mode) using available mass in 50µm bins — same logic as ResultsDisplay
+    const binSizeMm = 0.05; // 50 µm
+    const sizes = particles.map((p: any) => Number(p?.majorMm)).filter((n: number) => Number.isFinite(n) && n > 0);
     if (sizes.length === 0) return null;
-    const sorted = [...sizes].sort((a, b) => a - b);
-    return sorted[Math.floor(sorted.length / 2)] ?? null;
+
+    let minSize = Math.min(...sizes);
+    let maxSize = Math.max(...sizes);
+    if (minSize === maxSize) return minSize * 1000;
+
+    minSize = Math.max(0, minSize - binSizeMm * 0.5);
+    maxSize = maxSize + binSizeMm * 0.5;
+    const binCount = Math.ceil((maxSize - minSize) / binSizeMm);
+    const binWeights = new Array(binCount).fill(0);
+
+    particles.forEach((p: any) => {
+      const idx = Math.floor((Number(p?.majorMm) - minSize) / binSizeMm);
+      if (idx >= 0 && idx < binCount) binWeights[idx] += (Number(p?.attainableVol) || 0);
+    });
+
+    const peakIdx = binWeights.indexOf(Math.max(...binWeights));
+    const modeMm = minSize + (peakIdx + 0.5) * binSizeMm;
+    return modeMm * 1000;
   }, [analysisMode, analysisResults]);
 
   useEffect(() => {
     if (analysisMode !== 'grind') return;
-    if (grindMedianUm == null) return;
-    // default the override to the computed median (user can still edit)
-    setMedianOverrideUm(String(Math.round(grindMedianUm)));
-  }, [analysisMode, grindMedianUm]);
+    if (grindModeUm == null) return;
+    // default the override to the computed peak/mode (user can still edit)
+    setMedianOverrideUm(String(Math.round(grindModeUm)));
+  }, [analysisMode, grindModeUm]);
 
   async function getOrCreateGrinderUid(userUid: string, makerRaw: string, modelRaw: string): Promise<string> {
     const maker = makerRaw.trim();
@@ -177,7 +197,7 @@ export function AnalysisApp() {
       setMapMsg(t('analysis.grindMap.loginRequired'));
       return;
     }
-    if (analysisMode !== 'grind' || grindMedianUm == null) {
+    if (analysisMode !== 'grind' || grindModeUm == null) {
       setMapMsg(t('analysis.grindMap.noGrindData'));
       return;
     }
@@ -296,56 +316,6 @@ export function AnalysisApp() {
           <div className="text-xs text-gray-500">{t('calibration.note')}</div>
         </div>
 
-        {/* Extraction Card */}
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
-          <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
-            <Activity className="w-5 h-5" /> {t('analysis.extraction.title')}
-          </h2>
-
-          <div className="grid grid-cols-3 gap-4 mb-6">
-            <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">{t('analysis.field.dose')}</label>
-              <input
-                type="number"
-                value={dose}
-                onChange={(e) => setDose(parseFloat(e.target.value) || 0)}
-                className="w-full p-2 border rounded-lg"
-                step="0.1"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">{t('analysis.field.yield')}</label>
-              <input
-                type="number"
-                value={yieldWeight}
-                onChange={(e) => setYieldWeight(parseFloat(e.target.value) || 0)}
-                className="w-full p-2 border rounded-lg"
-                step="0.1"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">{t('analysis.field.tds')}</label>
-              <input
-                type="number"
-                value={tds}
-                onChange={(e) => setTds(parseFloat(e.target.value) || 0)}
-                className="w-full p-2 border rounded-lg"
-                step="0.01"
-              />
-            </div>
-          </div>
-
-          <div className="text-center p-4 bg-amber-50 rounded-lg">
-            <div className="text-sm text-amber-800">{t('analysis.extractionYield')}</div>
-            <div className="text-3xl font-bold text-amber-900">{extPct}%</div>
-          </div>
-        </div>
-
-        {/* Chart */}
-        <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100">
-          <Scatter options={chartOptions} data={chartData} />
-        </div>
-
         {/* Calibration Input */}
         <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100">
           <label className="block text-xs font-medium text-gray-500 mb-1">
@@ -404,18 +374,18 @@ export function AnalysisApp() {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="block text-xs font-medium text-gray-500 mb-1">{t('grinder.field.maker')}</label>
-                <input
-                  className="w-full p-2 border rounded-lg"
+                <AutocompleteInput
                   value={grinderMaker}
-                  onChange={(e) => setGrinderMaker(e.target.value)}
+                  onChange={setGrinderMaker}
+                  suggestions={makers}
                 />
               </div>
               <div>
                 <label className="block text-xs font-medium text-gray-500 mb-1">{t('grinder.field.model')}</label>
-                <input
-                  className="w-full p-2 border rounded-lg"
+                <AutocompleteInput
                   value={grinderModel}
-                  onChange={(e) => setGrinderModel(e.target.value)}
+                  onChange={setGrinderModel}
+                  suggestions={modelsForMaker(grinderMaker)}
                 />
               </div>
               <div className="sm:col-span-2">
@@ -437,7 +407,7 @@ export function AnalysisApp() {
                   placeholder={t('grindMap.placeholder.particleMedianUm')}
                 />
                 <div className="text-xs text-gray-500 mt-1">
-                  {grindMedianUm == null ? t('analysis.grindMap.noGrindData') : `median ≈ ${Math.round(grindMedianUm)} μm`}
+                  {grindModeUm == null ? t('analysis.grindMap.noGrindData') : `peak (mode) ≈ ${Math.round(grindModeUm)} μm`}
                 </div>
               </div>
             </div>
@@ -454,6 +424,56 @@ export function AnalysisApp() {
             </button>
           </div>
         )}
+
+        {/* Extraction Card */}
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+          <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
+            <Activity className="w-5 h-5" /> {t('analysis.extraction.title')}
+          </h2>
+
+          <div className="grid grid-cols-3 gap-4 mb-6">
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">{t('analysis.field.dose')}</label>
+              <input
+                type="number"
+                value={dose}
+                onChange={(e) => setDose(parseFloat(e.target.value) || 0)}
+                className="w-full p-2 border rounded-lg"
+                step="0.1"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">{t('analysis.field.yield')}</label>
+              <input
+                type="number"
+                value={yieldWeight}
+                onChange={(e) => setYieldWeight(parseFloat(e.target.value) || 0)}
+                className="w-full p-2 border rounded-lg"
+                step="0.1"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">{t('analysis.field.tds')}</label>
+              <input
+                type="number"
+                value={tds}
+                onChange={(e) => setTds(parseFloat(e.target.value) || 0)}
+                className="w-full p-2 border rounded-lg"
+                step="0.01"
+              />
+            </div>
+          </div>
+
+          <div className="text-center p-4 bg-amber-50 rounded-lg">
+            <div className="text-sm text-amber-800">{t('analysis.extractionYield')}</div>
+            <div className="text-3xl font-bold text-amber-900">{extPct}%</div>
+          </div>
+        </div>
+
+        {/* Chart */}
+        <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100">
+          <Scatter options={chartOptions} data={chartData} />
+        </div>
       </div>
     </div>
   );

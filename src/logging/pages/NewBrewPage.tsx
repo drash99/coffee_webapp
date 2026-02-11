@@ -3,6 +3,9 @@ import type { AppUser } from '../../auth/types';
 import { getSupabaseClient } from '../../config/supabase';
 import { FlavorWheelPicker } from '../components/FlavorWheelPicker';
 import { StarRating } from '../components/StarRating';
+import { AutocompleteInput } from '../components/AutocompleteInput';
+import { useGrinderSuggestions } from '../hooks/useGrinderSuggestions';
+import { useBeanSuggestions } from '../hooks/useBeanSuggestions';
 import type { BeanInput, BrewInput, FlavorNote, GrinderInput } from '../types';
 import { useI18n } from '../../i18n/I18nProvider';
 
@@ -77,6 +80,9 @@ export function NewBrewPage({ user }: Props) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
+
+  const { makers, modelsForMaker } = useGrinderSuggestions(user.uid);
+  const { roasteries, countries, locationsForCountry, producersForLocation, varietals } = useBeanSuggestions(user.uid);
 
   const brewDateIso = useMemo(() => {
     try {
@@ -200,6 +206,19 @@ export function NewBrewPage({ user }: Props) {
       });
       if (beanErr) throw new Error(beanErr.message);
 
+      // Insert normalized bean flavor notes for efficient hierarchical filtering
+      if (bean.cup_flavor_notes.length > 0) {
+        const beanNoteRows = bean.cup_flavor_notes.map((n) => ({
+          bean_uid,
+          l1: n.path[0] ?? '',
+          l2: n.path[1] ?? null,
+          l3: n.path[2] ?? null,
+          color: n.color
+        }));
+        const { error: bfnErr } = await supabase.from('bean_flavor_notes').insert(beanNoteRows);
+        if (bfnErr) throw new Error(bfnErr.message);
+      }
+
       const grinder_uid =
         grinder.maker.trim() && grinder.model.trim() ? await getOrCreateGrinderUid(grinder.maker, grinder.model) : null;
 
@@ -227,6 +246,19 @@ export function NewBrewPage({ user }: Props) {
         taste_flavor_notes: (brew.taste_flavor_notes as FlavorNote[]) || []
       });
       if (brewErr) throw new Error(brewErr.message);
+
+      // Insert normalized brew flavor notes for efficient hierarchical filtering
+      if (brew.taste_flavor_notes.length > 0) {
+        const brewNoteRows = brew.taste_flavor_notes.map((n) => ({
+          brew_uid,
+          l1: n.path[0] ?? '',
+          l2: n.path[1] ?? null,
+          l3: n.path[2] ?? null,
+          color: n.color
+        }));
+        const { error: bfnErr } = await supabase.from('brew_flavor_notes').insert(brewNoteRows);
+        if (bfnErr) throw new Error(bfnErr.message);
+      }
 
       setOk(t('newBrew.saved'));
       // Keep brew date, clear the rest for convenience
@@ -283,28 +315,36 @@ export function NewBrewPage({ user }: Props) {
           </div>
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">{t('bean.field.roastery')}</label>
-            <input className="w-full p-2 border rounded-lg" value={bean.roastery} onChange={(e) => setBean({ ...bean, roastery: e.target.value })} />
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">{t('bean.field.producer')}</label>
-            <input className="w-full p-2 border rounded-lg" value={bean.producer} onChange={(e) => setBean({ ...bean, producer: e.target.value })} />
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">{t('bean.field.originLocation')}</label>
-            <input
-              className="w-full p-2 border rounded-lg"
-              value={bean.origin_location}
-              onChange={(e) => setBean({ ...bean, origin_location: e.target.value })}
-              placeholder={t('bean.placeholder.originLocation')}
+            <AutocompleteInput
+              value={bean.roastery}
+              onChange={(v) => setBean({ ...bean, roastery: v })}
+              suggestions={roasteries}
             />
           </div>
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">{t('bean.field.originCountry')}</label>
-            <input
-              className="w-full p-2 border rounded-lg"
+            <AutocompleteInput
               value={bean.origin_country}
-              onChange={(e) => setBean({ ...bean, origin_country: e.target.value })}
+              onChange={(v) => setBean({ ...bean, origin_country: v })}
+              suggestions={countries}
               placeholder={t('bean.placeholder.originCountry')}
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">{t('bean.field.originLocation')}</label>
+            <AutocompleteInput
+              value={bean.origin_location}
+              onChange={(v) => setBean({ ...bean, origin_location: v })}
+              suggestions={locationsForCountry(bean.origin_country)}
+              placeholder={t('bean.placeholder.originLocation')}
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">{t('bean.field.producer')}</label>
+            <AutocompleteInput
+              value={bean.producer}
+              onChange={(v) => setBean({ ...bean, producer: v })}
+              suggestions={producersForLocation(bean.origin_country, bean.origin_location)}
             />
           </div>
           <div>
@@ -313,7 +353,11 @@ export function NewBrewPage({ user }: Props) {
           </div>
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">{t('bean.field.varietal')}</label>
-            <input className="w-full p-2 border rounded-lg" value={bean.varietal} onChange={(e) => setBean({ ...bean, varietal: e.target.value })} />
+            <AutocompleteInput
+              value={bean.varietal}
+              onChange={(v) => setBean({ ...bean, varietal: v })}
+              suggestions={varietals}
+            />
           </div>
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">{t('bean.field.roastedOn')}</label>
@@ -378,19 +422,19 @@ export function NewBrewPage({ user }: Props) {
 
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">{t('grinder.field.maker')}</label>
-            <input
-              className="w-full p-2 border rounded-lg"
+            <AutocompleteInput
               value={grinder.maker}
-              onChange={(e) => setGrinder({ ...grinder, maker: e.target.value })}
+              onChange={(v) => setGrinder({ ...grinder, maker: v })}
+              suggestions={makers}
               placeholder={t('grinder.placeholder.maker')}
             />
           </div>
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">{t('grinder.field.model')}</label>
-            <input
-              className="w-full p-2 border rounded-lg"
+            <AutocompleteInput
               value={grinder.model}
-              onChange={(e) => setGrinder({ ...grinder, model: e.target.value })}
+              onChange={(v) => setGrinder({ ...grinder, model: v })}
+              suggestions={modelsForMaker(grinder.maker)}
               placeholder={t('grinder.placeholder.model')}
             />
           </div>
