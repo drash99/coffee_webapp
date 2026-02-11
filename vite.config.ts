@@ -6,6 +6,9 @@ import { VitePWA } from 'vite-plugin-pwa'
 export default defineConfig({
   // GitHub Pages serves from https://user.github.io/repo-name/ so base must be /repo-name/
   base: process.env.VITE_BASE_PATH || '/',
+  define: {
+    __BUILD_TIME__: JSON.stringify(new Date().toISOString()),
+  },
   plugins: [
     react(),
     VitePWA({

@@ -103,6 +103,10 @@ function App() {
       <main className="max-w-5xl mx-auto">
         {tab === 'analysis' ? <AnalysisApp /> : <LoggingApp />}
       </main>
+
+      <footer className="max-w-5xl mx-auto mt-8 pb-4 text-center text-xs text-gray-400">
+        Built {new Date(__BUILD_TIME__).toLocaleString()}
+      </footer>
     </div>
   );
 }
