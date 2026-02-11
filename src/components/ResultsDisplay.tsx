@@ -2,11 +2,14 @@ import { useMemo, useState, useEffect } from 'react';
 import { Scatter, Bar, Line } from 'react-chartjs-2';
 import { useI18n } from '../i18n/I18nProvider';
 
+/** Image bytes from the worker — Uint8Array is 8× smaller than number[]. */
+type ImageBytes = { data: Uint8Array | number[]; width: number; height: number };
+
 export interface ResultsDisplayProps {
   mode: 'bean' | 'grind';
   data: any[];
-  stageImageData?: { data: number[]; width: number; height: number };
-  warpedImageData?: { data: number[]; width: number; height: number };
+  stageImageData?: ImageBytes;
+  warpedImageData?: ImageBytes;
   lutCurves?: { r: number[]; g: number[]; b: number[] };
   loading?: boolean;
 }
@@ -43,7 +46,9 @@ const HISTOGRAM_OPTIONS: { value: HistogramType; label: string }[] = [
   { value: 'surf_vol', label: 'Surface vs Volume' },
 ];
 
-function useImageDataUrl(imageData: { data: number[]; width: number; height: number } | undefined): string | null {
+/** Convert worker image bytes to a blob URL for display.
+ *  Uses blob URL (cheap pointer) instead of base64 data URL (33% larger string copy). */
+function useImageBlobUrl(imageData: ImageBytes | undefined): string | null {
   const [url, setUrl] = useState<string | null>(null);
   useEffect(() => {
     if (!imageData?.data?.length || !imageData.width || !imageData.height) {
@@ -55,18 +60,27 @@ function useImageDataUrl(imageData: { data: number[]; width: number; height: num
     canvas.height = imageData.height;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-    const idata = new ImageData(new Uint8ClampedArray(imageData.data), imageData.width, imageData.height);
+    const clamped = new Uint8ClampedArray(imageData.data);
+    const idata = new ImageData(clamped, imageData.width, imageData.height);
     ctx.putImageData(idata, 0, 0);
-    setUrl(canvas.toDataURL('image/png'));
-    return () => setUrl(null);
+    // Use blob URL instead of base64 data URL — avoids a huge string copy
+    canvas.toBlob((blob) => {
+      if (blob) setUrl(URL.createObjectURL(blob));
+    }, 'image/png');
+    // Free canvas memory
+    canvas.width = 0;
+    canvas.height = 0;
+    return () => {
+      setUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return null; });
+    };
   }, [imageData]);
   return url;
 }
 
 export function ResultsDisplay({ mode, data, stageImageData, warpedImageData, lutCurves, loading }: ResultsDisplayProps) {
   const { t } = useI18n();
-  const stageImageUrl = useImageDataUrl(stageImageData);
-  const warpedImageUrl = useImageDataUrl(warpedImageData);
+  const stageImageUrl = useImageBlobUrl(stageImageData);
+  const warpedImageUrl = useImageBlobUrl(warpedImageData);
   const [histogramType, setHistogramType] = useState<HistogramType>('av_mass_diam');
 
   const stats = useMemo(() => {

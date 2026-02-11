@@ -448,24 +448,33 @@ function processImage(input: { imageData: ImageData, width: number, height: numb
     results = analyzeBeans(stageRoi, luts, wbFactors, scaleCorrection);
   }
 
-  // Debug: warped image with LUT/gamma applied, then overlay circles for gray and CMYK patches
-  const warpedVis = warped.clone();
-  applyLutToMatRGBA(warpedVis, luts);
-  const green = new cv.Scalar(0, 255, 0, 255);   // BGR: gray ramp patches
-  const magenta = new cv.Scalar(255, 0, 255, 255); // BGR: CMYK patches
+  // Debug: warped image with LUT/gamma applied, then overlay circles for gray and CMYK patches.
+  // Free stageRoi first (it's a view into warped; analysis functions already cloned internally).
+  stageRoi.delete();
+
+  applyLutToMatRGBA(warped, luts);
+  const green = new cv.Scalar(0, 255, 0, 255);
+  const magenta = new cv.Scalar(255, 0, 255, 255);
   for (const xMm of CALIB_CONFIG.GRAY_PATCH_XS_MM) {
     const patchX = Math.round(xMm * CALIB_CONFIG.SCALE);
     const patchY = Math.round(CALIB_CONFIG.GRAY_PATCH_Y_MM * CALIB_CONFIG.SCALE);
-    cv.circle(warpedVis, new cv.Point(patchX, patchY), radius, green, 2);
+    cv.circle(warped, new cv.Point(patchX, patchY), radius, green, 2);
   }
   const cmykY = Math.round(CALIB_CONFIG.CMYK_PATCH_Y_MM * CALIB_CONFIG.SCALE);
   const cmykRadius = Math.floor(3 * CALIB_CONFIG.SCALE);
   for (const xMm of CALIB_CONFIG.CMYK_PATCH_XS_MM) {
     const patchX = Math.round(xMm * CALIB_CONFIG.SCALE);
-    cv.circle(warpedVis, new cv.Point(patchX, cmykY), cmykRadius, magenta, 2);
+    cv.circle(warped, new cv.Point(patchX, cmykY), cmykRadius, magenta, 2);
   }
-  results.warpedImageData = { data: Array.from(warpedVis.data), width: warpedVis.cols, height: warpedVis.rows };
-  warpedVis.delete();
+
+  // Downscale warped for preview (3240×4500 → 810×1125 = ~3.6 MB instead of ~58 MB)
+  const PREVIEW_SCALE = 0.25;
+  const previewW = Math.round(warped.cols * PREVIEW_SCALE);
+  const previewH = Math.round(warped.rows * PREVIEW_SCALE);
+  const warpedSmall = new cv.Mat();
+  cv.resize(warped, warpedSmall, new cv.Size(previewW, previewH), 0, 0, cv.INTER_AREA);
+  results.warpedImageData = matToImageBytes(warpedSmall);
+  warpedSmall.delete();
 
   // LUT curves for debugging (input 0..255 -> output value per channel)
   results.lutCurves = { r: Array.from(luts.r), g: Array.from(luts.g), b: Array.from(luts.b) };
@@ -473,7 +482,7 @@ function processImage(input: { imageData: ImageData, width: number, height: numb
   console.log('[CV] Analysis done, cleanup');
   // Cleanup
   src.delete(); gray.delete(); srcPts.delete(); dstPts.delete();
-  M.delete(); warped.delete(); stageRoi.delete();
+  M.delete(); warped.delete();
 
   return results;
 }
@@ -632,11 +641,16 @@ function analyzeGrind(stageRoi: any, luts: any, scaleCorrection: number) {
   const filteredParticles = particles.filter(p => p.majorMm <= cutOffMm);
   console.log(`[CV] Outlier filtering: cut-off ${cutOffMm.toFixed(2)}mm. Removed ${particles.length - filteredParticles.length} particles.`);
 
-  const stageImageData = { data: Array.from(vis.data), width: vis.cols, height: vis.rows };
+  // Downscale stage preview to half (1440×1440 → 720×720 = ~2 MB instead of ~8 MB)
+  const stagePreviewW = Math.round(vis.cols * 0.5);
+  const stagePreviewH = Math.round(vis.rows * 0.5);
+  const visSmall = new cv.Mat();
+  cv.resize(vis, visSmall, new cv.Size(stagePreviewW, stagePreviewH), 0, 0, cv.INTER_AREA);
+  const stageImageData = matToImageBytes(visSmall);
+  visSmall.delete();
   
   vis.delete(); contours.delete(); hierarchy.delete();
   gray.delete(); graySmooth.delete(); graySharp.delete(); grayContrast.delete(); bw.delete(); mask.delete();
-  // labels.delete(); stats.delete(); centroids.delete(); // No longer used
   stageProc.delete();
 
   return { mode: 'grind', particles: filteredParticles, stageImageData };
@@ -777,7 +791,13 @@ function analyzeBeans(stageRoi: any, luts: any, wbFactors: any, scaleCorrection:
     if (cv.contourArea(cnt) >= minArea && cnt.rows >= 5) cv.drawContours(stageProc, contours, i, green, 4);
     console.log('[CV] analyzeBeans: contour', i, 'area', cv.contourArea(cnt), 'x', cnt.data32F[0], 'y', cnt.data32F[1]);
   }
-  const stageImageData = { data: Array.from(stageProc.data), width: stageProc.cols, height: stageProc.rows };
+  // Downscale stage preview to half
+  const stagePreviewW = Math.round(stageProc.cols * 0.5);
+  const stagePreviewH = Math.round(stageProc.rows * 0.5);
+  const procSmall = new cv.Mat();
+  cv.resize(stageProc, procSmall, new cv.Size(stagePreviewW, stagePreviewH), 0, 0, cv.INTER_AREA);
+  const stageImageData = matToImageBytes(procSmall);
+  procSmall.delete();
 
   gray.delete(); grayBlurred.delete(); bg.delete(); diff.delete(); bw.delete(); kernel.delete();
   mask.delete(); contours.delete(); hierarchy.delete();
@@ -807,6 +827,12 @@ function buildLut(observed: number[], expected: number[]): Uint8Array {
     }
   }
   return lut;
+}
+
+/** Extract pixel data from an OpenCV Mat as a compact {data: Uint8Array, width, height} object.
+ *  Uses Uint8Array (1 byte/elem) instead of Array.from() which creates Number[] (8 bytes/elem). */
+function matToImageBytes(mat: any): { data: Uint8Array; width: number; height: number } {
+  return { data: new Uint8Array(mat.data), width: mat.cols, height: mat.rows };
 }
 
 /** Apply R/G/B LUTs to an RGBA Mat in place (channel order R,G,B,A). Used for debug warped image. */
