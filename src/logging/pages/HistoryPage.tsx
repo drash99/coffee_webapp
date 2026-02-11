@@ -88,7 +88,7 @@ export function HistoryPage({ user }: Props) {
         .eq('user_uid', user.uid)
         .order('brew_date', { ascending: false });
       if (err) throw new Error(err.message);
-      setRows((data ?? []) as BrewWithBean[]);
+      setRows((data ?? []) as unknown as BrewWithBean[]);
       if ((data ?? []).length > 0 && !selectedUid) setSelectedUid((data ?? [])[0]?.uid ?? null);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load.');

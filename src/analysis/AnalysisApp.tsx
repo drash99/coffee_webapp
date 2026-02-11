@@ -274,15 +274,19 @@ export function AnalysisApp() {
             <h2 className="text-sm font-semibold text-gray-800">{t('calibration.title')}</h2>
             <div className="flex items-center gap-2">
               <a
-                href="/calibration_target.pdf"
-                download
+                href={import.meta.env.DEV ? `${import.meta.env.BASE_URL ?? '/'}calibration_target.pdf` : 'https://raw.githubusercontent.com/drash99/drash99.github.io/main/calibration_target.pdf'}
+                target="_blank"
+                rel="noopener noreferrer"
+                download="calibration_target.pdf"
                 className="px-3 py-2 rounded-lg bg-gray-900 text-white text-sm hover:bg-gray-800"
               >
                 {t('calibration.download.letter')}
               </a>
               <a
-                href="/calibration_target_a4.pdf"
-                download
+                href={import.meta.env.DEV ? `${import.meta.env.BASE_URL ?? '/'}calibration_target_a4.pdf` : 'https://raw.githubusercontent.com/drash99/drash99.github.io/main/calibration_target_a4.pdf'}
+                target="_blank"
+                rel="noopener noreferrer"
+                download="calibration_target_a4.pdf"
                 className="px-3 py-2 rounded-lg border bg-white text-sm hover:bg-gray-50"
               >
                 {t('calibration.download.a4')}

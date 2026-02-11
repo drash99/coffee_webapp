@@ -153,3 +153,25 @@ Then:
 4. Select an image of your calibration sheet
 5. View results with plots and statistics
 
+### Deploy to GitHub Pages
+
+The app uses `import.meta.env.BASE_URL` for asset links (e.g. calibration PDFs).
+
+- **User/org Pages** (`username.github.io`): Site is at the root (`https://drash99.github.io/`). Use the **default** base path — do **not** set `VITE_BASE_PATH`. Build with `npm run build` and deploy the `dist/` contents to the root of your `username.github.io` repo.
+- **Project Pages** (`username.github.io/repo-name`): Set the base when building:
+  ```bash
+  VITE_BASE_PATH=/repo-name/ npm run build
+  ```
+
+**Automated deploy to drash99.github.io**
+
+A workflow (`.github/workflows/deploy-to-pages.yml`) builds on push to `main` and pushes the built app to `drash99/drash99.github.io`. To enable it:
+
+1. Generate an SSH key pair (no passphrase):
+   ```bash
+   ssh-keygen -t ed25519 -C "deploy" -f deploy_key -N ""
+   ```
+2. In **drash99.github.io** repo: Settings → Deploy keys → Add deploy key. Paste contents of `deploy_key.pub`. Allow write access.
+3. In your **source repo** (where this workflow runs): Settings → Secrets and variables → Actions → New repository secret. Name: `ACTIONS_DEPLOY_KEY`, value: contents of `deploy_key` (private key).
+4. Push to `main` (or run the “Deploy to GitHub Pages” workflow manually). The workflow builds with base `/` and pushes `dist/` to `drash99.github.io` `main` branch.
+

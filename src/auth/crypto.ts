@@ -22,7 +22,7 @@ export async function pbkdf2HashBase64(password: string, saltBase64: string, ite
   const keyMaterial = await crypto.subtle.importKey('raw', enc.encode(password), { name: 'PBKDF2' }, false, ['deriveBits']);
   const saltBytes = base64ToBytes(saltBase64);
   const bits = await crypto.subtle.deriveBits(
-    { name: 'PBKDF2', hash: 'SHA-256', salt: saltBytes, iterations },
+    { name: 'PBKDF2', hash: 'SHA-256', salt: saltBytes as BufferSource, iterations },
     keyMaterial,
     256
   );

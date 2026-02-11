@@ -157,11 +157,11 @@ export function ResultsDisplay({ mode, data, stageImageData, warpedImageData, lu
           </div>
           <div className="text-center p-3 bg-blue-50 rounded-lg">
             <div className="text-xs text-blue-800">{t('results.stat.meanUm')}</div>
-            <div className="text-2xl font-bold text-blue-900">{stats.mean.toFixed(1)}</div>
+            <div className="text-2xl font-bold text-blue-900">{(stats.mean ?? 0).toFixed(1)}</div>
           </div>
           <div className="text-center p-3 bg-green-50 rounded-lg">
             <div className="text-xs text-green-800">{t('results.stat.stdevUm')}</div>
-            <div className="text-2xl font-bold text-green-900">{stats.stdev.toFixed(1)}</div>
+            <div className="text-2xl font-bold text-green-900">{(stats.stdev ?? 0).toFixed(1)}</div>
           </div>
         </div>
         
@@ -183,7 +183,7 @@ export function ResultsDisplay({ mode, data, stageImageData, warpedImageData, lu
         </div>
         
         <div className="text-sm text-gray-600">
-          <p>{t('results.stat.median', { value: stats.median.toFixed(1) })}</p>
+          <p>{t('results.stat.median', { value: (stats.median ?? 0).toFixed(1) })}</p>
         </div>
       </div>
     );
@@ -273,18 +273,18 @@ export function ResultsDisplay({ mode, data, stageImageData, warpedImageData, lu
           </div>
           <div className="text-center p-3 bg-blue-50 rounded-lg">
             <div className="text-xs text-blue-800">{t('results.stat.avgSizeMm')}</div>
-            <div className="text-2xl font-bold text-blue-900">{stats.sizeMean.toFixed(2)}</div>
-            <div className="text-xs text-blue-600">±{stats.sizeStdev.toFixed(2)}</div>
+            <div className="text-2xl font-bold text-blue-900">{(stats.sizeMean ?? 0).toFixed(2)}</div>
+            <div className="text-xs text-blue-600">±{(stats.sizeStdev ?? 0).toFixed(2)}</div>
           </div>
           <div className="text-center p-3 bg-purple-50 rounded-lg">
             <div className="text-xs text-purple-800">{t('results.stat.avgLightness')}</div>
-            <div className="text-2xl font-bold text-purple-900">{stats.lumaMean.toFixed(1)}</div>
-            <div className="text-xs text-purple-600">±{stats.lumaStdev.toFixed(1)}</div>
+            <div className="text-2xl font-bold text-purple-900">{(stats.lumaMean ?? 0).toFixed(1)}</div>
+            <div className="text-xs text-purple-600">±{(stats.lumaStdev ?? 0).toFixed(1)}</div>
           </div>
           <div className="text-center p-3 bg-green-50 rounded-lg">
             <div className="text-xs text-green-800">{t('results.stat.roastLevel')}</div>
             <div className="text-xl font-bold text-green-900">
-              {stats.lumaMean > 150 ? t('results.roast.light') : stats.lumaMean > 100 ? t('results.roast.medium') : t('results.roast.dark')}
+              {(stats.lumaMean ?? 0) > 150 ? t('results.roast.light') : (stats.lumaMean ?? 0) > 100 ? t('results.roast.medium') : t('results.roast.dark')}
             </div>
           </div>
         </div>

@@ -131,7 +131,6 @@ dist/
 *.swo
 
 # Project specific
-calibration_target.pdf
 __pycache__/
 *.pyc
 

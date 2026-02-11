@@ -1,0 +1,37 @@
+# Build and deploy to drash99.github.io (user Pages at root URL).
+# For username.github.io the site is at https://username.github.io/ so base path is '/'.
+name: Deploy to GitHub Pages (drash99.github.io)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install and build
+        run: |
+          npm ci
+          # User/org Pages (username.github.io) = root URL, so do NOT set VITE_BASE_PATH
+          npm run build
+
+      - name: Deploy to drash99.github.io
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          # Deploy the built files to the other repo
+          deploy_key: ${{ secrets.ACTIONS_DEPLOY_KEY }}
+          external_repository: drash99/drash99.github.io
+          publish_dir: ./dist
+          publish_branch: main
+          # Optional: keep the destination repo’s commit history
+          force_orphan: true

@@ -171,6 +171,22 @@ function processImage(input: { imageData: ImageData, width: number, height: numb
   postMessage({ type: 'DEBUG', payload: { matType: typeof cv?.Mat, cv8uc4: cv?.CV_8UC4, matFromImageDataType: typeof cv?.matFromImageData } });
 
   let src = matFromImageDataSafe(imageData);
+  
+  // Resize large images to prevent OOM on mobile (especially iOS)
+  // 12MP input (4000x3000) is too large for multiple copies in WASM memory.
+  // 2048px is sufficient for marker detection.
+  // Note: Warped output size is fixed by CALIB_CONFIG, so accuracy is preserved.
+  const maxDim = 2048;
+  if (Math.max(src.rows, src.cols) > maxDim) {
+    const scale = maxDim / Math.max(src.rows, src.cols);
+    const newSize = new cv.Size(Math.round(src.cols * scale), Math.round(src.rows * scale));
+    const resized = new cv.Mat();
+    cv.resize(src, resized, newSize, 0, 0, cv.INTER_AREA);
+    src.delete();
+    src = resized;
+    console.log('[CV] Resized input to', src.cols, 'x', src.rows);
+  }
+
   let gray = new cv.Mat();
   cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
   console.log('[CV] src/gray created');
@@ -465,33 +481,30 @@ function processImage(input: { imageData: ImageData, width: number, height: numb
 function analyzeGrind(stageRoi: any, luts: any, scaleCorrection: number) {
   console.log('[CV] analyzeGrind start');
 
-  // Post-process the cropped stage image ONCE (LUT), then use it for:
-  // - detection (contrast + sharpen + threshold)
-  // - outline preview
   const stageProc = stageRoi.clone();
   applyLutToMatRGBA(stageProc, luts);
 
   const gray = new cv.Mat();
   cv.cvtColor(stageProc, gray, cv.COLOR_RGBA2GRAY);
 
-  // Make tiny particles behave like "black dots":
-  // 1) increase contrast, 2) sharpen, then threshold (black -> white foreground).
-  const grayContrast = new cv.Mat();
-  // alpha: contrast gain, beta: brightness shift (tweakable)
-  cv.convertScaleAbs(gray, grayContrast, 2.2, -40);
-
+  // 1. Sharpen to catch fine particles and edges
+  const graySmooth = new cv.Mat();
+  cv.GaussianBlur(gray, graySmooth, new cv.Size(3, 3), 0);
   const graySharp = new cv.Mat();
-  const k = matFromArrayF32Safe(3, 3, cv.CV_32F, [
-     0, -1,  0,
-    -1,  5, -1,
-     0, -1,  0
-  ]);
-  cv.filter2D(grayContrast, graySharp, cv.CV_8U, k);
-  k.delete();
+  cv.addWeighted(gray, 1.5, graySmooth, -0.5, 0, graySharp);
 
+  // 2. High Contrast to capture light brownish particles
+  const grayContrast = new cv.Mat();
+  cv.convertScaleAbs(graySharp, grayContrast, 2.5, -50);
+
+  // 3. Threshold (Otsu, Inverted so dark particles -> white)
   const bw = new cv.Mat();
-  // Otsu auto-threshold. Invert so dark particles become white foreground.
-  cv.threshold(graySharp, bw, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU);
+  cv.threshold(grayContrast, bw, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU);
+
+  // 4. Morphological Close to fill holes/mosaic without shrinking contours
+  const kernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(3, 3));
+  cv.morphologyEx(bw, bw, cv.MORPH_CLOSE, kernel);
+  kernel.delete();
 
   const mask = matZerosSafe(bw.rows, bw.cols, cv.CV_8UC1);
   const r = Math.floor(Math.min(bw.rows, bw.cols) * 0.48);
@@ -504,8 +517,8 @@ function analyzeGrind(stageRoi: any, luts: any, scaleCorrection: number) {
   const centroids = new cv.Mat();
   const num = cv.connectedComponentsWithStats(bw, labels, stats, centroids, 8);
 
-  const minAreaPx = 3;
-  const maxAreaPx = (bw.rows * bw.cols) * 0.12;
+  const minAreaPx = 10; // Catch small particles
+  const maxAreaPx = (bw.rows * bw.cols) * 0.20;
   console.log('[CV] analyzeGrind: components', num, 'filter area', minAreaPx, '-', Math.round(maxAreaPx), 'px');
 
   const particles: any[] = [];
@@ -516,7 +529,10 @@ function analyzeGrind(stageRoi: any, luts: any, scaleCorrection: number) {
     // Size estimate
     const majorMm = (Math.sqrt(area / Math.PI) * 2) / CALIB_CONFIG.SCALE * scaleCorrection;
 
-    // No color info in grind particles (by request) — just geometry.
+    // Filter clumps (aggregated particles) from statistics
+    // Typical grind is < 2mm. Anything > 3.0mm is likely a clump/chaff.
+    if (majorMm > 3.0) continue; 
+
     particles.push({
       majorMm,
       minorMm: majorMm,
@@ -531,7 +547,6 @@ function analyzeGrind(stageRoi: any, luts: any, scaleCorrection: number) {
   cv.findContours(bw, visContours, visHierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
   const vis = stageProc.clone();
   // IMPORTANT: stage ROI is 4-channel; include alpha=255 so outlines are visible in the preview.
-  // Use a small palette so you can visually confirm 1 contour ↔ 1 particle.
   const contourColors = [
     new cv.Scalar(0, 255, 0, 255),   // Green
     new cv.Scalar(0, 0, 255, 255),   // Red
@@ -541,16 +556,15 @@ function analyzeGrind(stageRoi: any, luts: any, scaleCorrection: number) {
   for (let i = 0; i < visContours.size(); i++) {
     const cnt = visContours.get(i);
     const a = cv.contourArea(cnt);
-    if (a >= minAreaPx && a <= maxAreaPx) {
+    // if (a >= minAreaPx && a <= maxAreaPx) {
       const color = contourColors[i % contourColors.length];
-      cv.drawContours(vis, visContours, i, color, 2);
-    }
+      cv.drawContours(vis, visContours, i, color, 1); // thinner line
+    // }
   }
   const stageImageData = { data: Array.from(vis.data), width: vis.cols, height: vis.rows };
+  
   vis.delete(); visContours.delete(); visHierarchy.delete();
-
-  gray.delete(); grayContrast.delete(); graySharp.delete();
-  bw.delete(); mask.delete(); labels.delete(); stats.delete(); centroids.delete();
+  gray.delete(); graySmooth.delete(); graySharp.delete(); grayContrast.delete(); bw.delete(); mask.delete(); labels.delete(); stats.delete(); centroids.delete();
   stageProc.delete();
 
   return { mode: 'grind', particles, stageImageData };
