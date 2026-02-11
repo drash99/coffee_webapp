@@ -643,7 +643,7 @@ function analyzeGrind(stageRoi: any, luts: any, scaleCorrection: number) {
 }
 
 // Based on Jonathan Gagné's research
-function calculateAttainableVolume(totalVolume: number, semiMajor: number, semiMinor: number): number {
+function calculateAttainableVolume(totalVolume: number, _semiMajor: number, _semiMinor: number): number {
   const depthLimit = 0.1; // mm
   // Equivalent radius of a sphere with same volume
   const r_eq = Math.pow((3/4 * totalVolume / Math.PI), 1/3);

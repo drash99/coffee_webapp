@@ -72,6 +72,90 @@ export function AnalysisApp() {
     };
   }, []);
 
+  /**
+   * Load + down-scale an image file, return ImageData at a safe resolution.
+   *
+   * Why this is tricky on iOS Safari:
+   * - iPhone photos are 12–48 MP (HEIC), and Live Photos bundle a video.
+   * - Decoding the full-res HEIC into an <img> bitmap can use 48–192 MB,
+   *   which alone can crash the Safari tab (~200–300 MB per-tab limit).
+   * - `createImageBitmap` with `resizeWidth/Height` lets the browser decode
+   *   AND resize in a single native pass, avoiding the full-res bitmap.
+   *   Supported in Safari 15+ (iOS 15+).
+   * - We also transfer (not clone) the ArrayBuffer to the worker to halve
+   *   peak memory usage during postMessage.
+   */
+  const loadImageData = async (file: File, maxDim: number): Promise<{ imageData: ImageData; w: number; h: number }> => {
+    // ── Modern path: createImageBitmap (iOS 15+, all Chromium, Firefox) ──
+    if (typeof createImageBitmap !== 'undefined') {
+      // Probe dimensions (browser decodes; we close() immediately to release)
+      const probe = await createImageBitmap(file);
+      let w = probe.width;
+      let h = probe.height;
+      probe.close();
+
+      if (w > maxDim || h > maxDim) {
+        const scale = maxDim / Math.max(w, h);
+        w = Math.round(w * scale);
+        h = Math.round(h * scale);
+      }
+
+      // Re-decode at target size – browser may skip full-res allocation
+      let bitmap: ImageBitmap;
+      try {
+        bitmap = await createImageBitmap(file, { resizeWidth: w, resizeHeight: h, resizeQuality: 'high' });
+      } catch {
+        // Some older Safari builds accept createImageBitmap but reject options
+        bitmap = await createImageBitmap(file);
+      }
+
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) throw new Error('Canvas 2D context unavailable');
+      ctx.drawImage(bitmap, 0, 0, w, h);
+      bitmap.close();
+      const imageData = ctx.getImageData(0, 0, w, h);
+      canvas.width = 0;
+      canvas.height = 0;
+      return { imageData, w, h };
+    }
+
+    // ── Fallback: <img> element (very old browsers) ──
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      const url = URL.createObjectURL(file);
+      img.onload = () => {
+        try {
+          let w = img.width;
+          let h = img.height;
+          if (w > maxDim || h > maxDim) {
+            const scale = maxDim / Math.max(w, h);
+            w = Math.round(w * scale);
+            h = Math.round(h * scale);
+          }
+          const canvas = document.createElement('canvas');
+          canvas.width = w;
+          canvas.height = h;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) { reject(new Error('No 2D context')); return; }
+          ctx.drawImage(img, 0, 0, w, h);
+          const imageData = ctx.getImageData(0, 0, w, h);
+          canvas.width = 0;
+          canvas.height = 0;
+          resolve({ imageData, w, h });
+        } catch (e) {
+          reject(e);
+        } finally {
+          URL.revokeObjectURL(url);
+        }
+      };
+      img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Failed to decode image')); };
+      img.src = url;
+    });
+  };
+
   const handleImageSelect = async (file: File, mode: 'bean' | 'grind') => {
     if (!cvReady) {
       alert(t('analysis.alert.cvNotReady'));
@@ -82,46 +166,23 @@ export function AnalysisApp() {
     setAnalysisMode(mode);
     setAnalysisResults(null);
 
-    // Read image file
-    const img = new Image();
-    const url = URL.createObjectURL(file);
+    try {
+      const { imageData, w, h } = await loadImageData(file, 2048);
 
-    img.onload = () => {
-      // Create canvas to get ImageData
-      const canvas = document.createElement('canvas');
-      canvas.width = img.width;
-      canvas.height = img.height;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) {
-        setProcessing(false);
-        return;
-      }
-
-      ctx.drawImage(img, 0, 0);
-      const imageData = ctx.getImageData(0, 0, img.width, img.height);
-
-      // Send to worker
-      workerRef.current?.postMessage({
-        type: 'PROCESS_IMAGE',
-        payload: {
-          imageData,
-          width: img.width,
-          height: img.height,
-          rulerLengthMm: measuredRulerMm,
-          mode
-        }
-      });
-
-      URL.revokeObjectURL(url);
-    };
-
-    img.onerror = () => {
-      alert(t('analysis.alert.failedLoadImage'));
+      // Transfer the underlying ArrayBuffer instead of cloning it.
+      // This halves peak memory during the postMessage handoff.
+      workerRef.current?.postMessage(
+        {
+          type: 'PROCESS_IMAGE',
+          payload: { imageData, width: w, height: h, rulerLengthMm: measuredRulerMm, mode }
+        },
+        [imageData.data.buffer]
+      );
+    } catch (err) {
+      console.error('Image processing error:', err);
+      alert(t('analysis.alert.errorPrefix', { message: String(err) }));
       setProcessing(false);
-      URL.revokeObjectURL(url);
-    };
-
-    img.src = url;
+    }
   };
 
   const grindModeUm = useMemo<number | null>(() => {

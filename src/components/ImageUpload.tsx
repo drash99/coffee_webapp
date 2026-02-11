@@ -30,10 +30,12 @@ export function ImageUpload({ mode, onImageSelect, disabled }: ImageUploadProps)
         {mode === 'bean' ? t('upload.bean.title') : t('upload.grind.title')}
       </h2>
       
+      {/* Explicit MIME types instead of image/* to prevent iOS from
+          bundling Live-Photo video data with the selected still image. */}
       <input
         ref={fileInputRef}
         type="file"
-        accept="image/*"
+        accept="image/jpeg,image/png,image/heic,image/heif,image/webp"
         onChange={handleFileChange}
         className="hidden"
         disabled={disabled}

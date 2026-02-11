@@ -46,7 +46,7 @@ A zero-cost, local-first Progressive Web App (PWA) for specialty coffee analytic
     - **Extraction yield** estimation (surface-area-based model)
     - Outlier filtering (sparse high-end bins removed automatically)
     - Peak (mode) diameter via available-mass-weighted 50um bins
-*   **iOS Support:** Input image resizing (max 2048px) to prevent OOM crashes on mobile Safari
+*   **iOS Safari Support:** Input images are automatically downscaled (max 2048px longest edge) before canvas/worker processing to prevent out-of-memory tab crashes on mobile Safari, which has a strict ~16 megapixel canvas limit. iPhone photos (12–48 MP) would otherwise exceed this. The ArUco markers still provide accurate physical scale after downscaling.
 
 ---
 
@@ -78,11 +78,15 @@ The app has a separate **Logging** tab (next to **Analysis**) to record brews an
 - **History page**
   - Lists current user's brews as **date -- bean**
   - Clicking an entry loads its detailed view (bean info, grinder, dose/yield/TDS, recipe, flavor notes, etc.)
-  - **Filter panel** (toggle on/off) with 8 autocomplete filter fields:
-    - Roastery, Origin country, Origin location, Producer, Varietal, Cup notes (SCA), Grinder maker, Grinder model
-    - Suggestions derived from loaded brew data; matching is case-insensitive substring
+  - **Filter panel** (toggle on/off) with autocomplete and flavor wheel filters:
+    - Text filters: Roastery, Origin country, Origin location, Producer, Varietal, Grinder maker, Grinder model (case-insensitive substring matching, suggestions derived from loaded data)
+    - Flavor filters: Cup notes (SCA) and Taste notes (SCA) use the full FlavorWheelPicker with **hierarchical prefix matching** — selecting "Sweet" matches all Sweet/* notes (Honey, Vanilla, Brown Sugar/Caramel, etc.)
     - Active filter count badge, "Clear all" button, "Showing X of Y brews" counter
   - Client-side filtering (instant, no extra API calls)
+- **Normalized flavor note tables** (`bean_flavor_notes`, `brew_flavor_notes`):
+  - Junction tables with `l1`/`l2`/`l3` columns mapping to SCA Flavor Wheel hierarchy levels
+  - Enables efficient server-side hierarchical queries (e.g. `WHERE l1 = 'Sweet'`)
+  - Written alongside the existing jsonb columns on save; jsonb still used for display
 
 ### Supabase setup
 1. Create a Supabase project.
@@ -121,7 +125,8 @@ The app has a separate **Logging** tab (next to **Analysis**) to record brews an
 - [x] **Auth (prototype):** Simple id/password signup+login (salted hash).
 - [x] **Logging:** Bean + brew logging with autocomplete suggestions.
 - [x] **Grinder particle size mapping:** Save/search per grinder setting, auto-populated from analysis.
-- [x] **History filters:** Filter panel with 8 autocomplete fields (roastery, country, location, producer, varietal, cup notes, grinder maker/model).
+- [x] **History filters:** Filter panel with autocomplete text fields + SCA flavor wheel pickers with hierarchical prefix matching.
+- [x] **Normalized flavor note tables:** `bean_flavor_notes` / `brew_flavor_notes` junction tables for efficient hierarchical filtering.
 - [x] **Autocomplete inputs:** Reusable component used across New Brew, Analysis, and History pages.
 - [ ] **Save/load beans:** Allow saving beans and selecting from existing beans.
 - [ ] **Harden security:** Move to Supabase Auth + RLS (or Edge Functions) and remove client-side password verification.

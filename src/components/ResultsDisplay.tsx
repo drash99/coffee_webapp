@@ -174,7 +174,7 @@ export function ResultsDisplay({ mode, data, stageImageData, warpedImageData, lu
     // 3. Binning
     const isDiameter = histogramType.includes('diam');
     // User requested 100um grid (linear) for diameter.
-    const useLogBins = false; 
+    // Using 100µm linear grid for diameter (no log bins).
     
     let minX = Math.min(...xData.filter(x => x > 0));
     let maxX = Math.max(...xData);
