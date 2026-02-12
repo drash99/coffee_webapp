@@ -31,10 +31,12 @@ export const enUS = {
   'auth.error.loginFailed': 'Login failed.',
   'auth.error.signupFailed': 'Signup failed.',
   'auth.error.idRequired': 'Please enter an id.',
+  'auth.error.idInvalid': 'Use only letters, numbers, dot, underscore, or hyphen for id.',
   'auth.error.passwordRequired': 'Please enter a password.',
   'auth.error.passwordMismatch': 'Passwords do not match.',
   'auth.error.idInUse': 'That id is already in use.',
   'auth.error.invalidCredentials': 'Invalid id or password.',
+  'auth.error.authNotConfirmed': 'Email confirmation is required in Supabase Auth settings.',
   'auth.error.supabase': 'Server error: {message}',
 
   // Logging app
@@ -46,6 +48,11 @@ export const enUS = {
   // New brew: sections
   'newBrew.bean.title': 'Bean',
   'newBrew.brew.title': 'Brew',
+  'newBrew.bean.savedList': 'Saved beans',
+  'newBrew.bean.savedList.none': 'New bean (not selected)',
+  'newBrew.bean.save': 'Save bean',
+  'newBrew.bean.save.saving': 'Saving bean…',
+  'newBrew.bean.saved': 'Saved bean!',
   'newBrew.save': 'Save brew',
   'newBrew.save.saving': 'Saving…',
   'newBrew.saved': 'Saved!',
@@ -142,6 +149,15 @@ export const enUS = {
   'history.detail.tasteNotesSca': 'Taste notes (SCA)',
   'history.detail.extractionNote': 'Extraction note',
   'history.detail.tasteNote': 'Taste note (free text)',
+  'history.edit.start': 'Edit brew',
+  'history.edit.cancel': 'Cancel',
+  'history.edit.save': 'Save changes',
+  'history.edit.saving': 'Saving…',
+  'history.sort.label': 'Sort',
+  'history.sort.dateDesc': 'Date (newest)',
+  'history.sort.dateAsc': 'Date (oldest)',
+  'history.sort.ratingDesc': 'Rating (high to low)',
+  'history.sort.ratingAsc': 'Rating (low to high)',
 
   // Flavor wheel picker
   'flavorPicker.addNote': 'Add note',
@@ -219,5 +235,3 @@ export const enUS = {
   'results.alt.stageParticles': 'Stage with particle contours',
   'results.alt.stageBeans': 'Stage with bean contours',
 } as const;
-
-

@@ -1,7 +1,9 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { isSupabaseConfigured } from '../config/supabase';
 import type { AppUser } from '../auth/types';
-import { clearSession, loadSession, saveSession } from './session';
+import { getSupabaseClient } from '../config/supabase';
+import { logout } from '../auth/authService';
+import { clearSession, loadSession, loadSessionFromSupabase, saveSession } from './session';
 import { LoginPage } from './pages/LoginPage';
 import { SignupPage } from './pages/SignupPage';
 import { NewBrewPage } from './pages/NewBrewPage';
@@ -32,7 +34,35 @@ export function LoggingApp() {
   const [logTab, setLogTab] = useState<LogTab>('new');
 
   useEffect(() => {
-    setUser(loadSession());
+    const cached = loadSession();
+    if (cached) setUser(cached);
+
+    let active = true;
+    void loadSessionFromSupabase().then((next) => {
+      if (!active) return;
+      if (next) setUser(next);
+    });
+
+    let unsubscribe: (() => void) | null = null;
+    if (isSupabaseConfigured()) {
+      const supabase = getSupabaseClient();
+      const { data: authSub } = supabase.auth.onAuthStateChange(async (_event, session) => {
+        if (!active) return;
+        if (!session?.user) {
+          clearSession();
+          setUser(null);
+          return;
+        }
+        const next = await loadSessionFromSupabase();
+        if (next) setUser(next);
+      });
+      unsubscribe = () => authSub.subscription.unsubscribe();
+    }
+
+    return () => {
+      active = false;
+      if (unsubscribe) unsubscribe();
+    };
   }, []);
 
   if (!isSupabaseConfigured()) {
@@ -99,7 +129,10 @@ export function LoggingApp() {
         <button
           type="button"
           className="px-3 py-2 rounded-lg border bg-white text-sm hover:bg-gray-50"
-          onClick={() => {
+          onClick={async () => {
+            try {
+              await logout();
+            } catch {}
             clearSession();
             setUser(null);
           }}
@@ -121,5 +154,3 @@ export function LoggingApp() {
     </div>
   );
 }
-
-

@@ -56,11 +56,10 @@ The app has a separate **Logging** tab (next to **Analysis**) to record brews an
 
 ### What's implemented
 - **Top-level tabs**: Analysis vs Logging.
-- **Supabase-backed login (simple demo auth)**:
-  - Signup: `id` + `password` + `type again password`
-  - Checks if `id` is already used (no password complexity rules)
-  - Stores: `uid`, `id`, `salt`, `password_hash` (PBKDF2-SHA256 via WebCrypto)
-  - Login verifies the salted hash in the browser and saves a small session in `localStorage`
+- **Supabase Auth login**
+  - Signup/Login: `id` + `password` (`id` is mapped to a Supabase Auth email alias internally)
+  - Session/token handled by Supabase Auth
+  - Includes app-level validation for id format
 - **New brew logging**
   - Bean fields: roastery, producer, origin country, origin location, process, varietal, cup notes, roasted on
   - Brew fields: log date, rating (0-5 stars), recipe, coffee dose, coffee yield, coffee TDS (optional), water, water temp (optional), grind median, extraction note, taste note
@@ -90,15 +89,18 @@ The app has a separate **Logging** tab (next to **Analysis**) to record brews an
 
 ### Supabase setup
 1. Create a Supabase project.
-2. Create tables by running `supabase/schema.sql` in the Supabase SQL editor.
-3. Create a `.env.local` in the project root (gitignored) and set:
+2. In **Authentication > Providers > Email**, enable email/password sign-in.
+   - Recommended for this app's `id`-based UX: disable "Confirm email" so signup can log in immediately.
+3. Create tables + policies by running `supabase/schema.sql` in the Supabase SQL editor.
+   - For existing projects that used the old `app_users` model, run `supabase/patch_2026-02-12_auth_rls.sql`.
+4. Create a `.env.local` in the project root (gitignored) and set:
 
    - `VITE_SUPABASE_URL`
    - `VITE_SUPABASE_ANON_KEY`
 
-4. Restart the dev server after changing `.env.local`.
+5. Restart the dev server after changing `.env.local`.
 
-> Security note: this login system is intentionally minimal for prototyping. For production, use Supabase Auth + Row Level Security (RLS) and do password verification server-side (or via Edge Functions).
+> Security note: Logging data access is protected with Row Level Security (RLS). Make sure to run the latest schema/patch SQL.
 
 ---
 
@@ -114,22 +116,20 @@ The app has a separate **Logging** tab (next to **Analysis**) to record brews an
 - [x] **ArUco Support:** Worker includes ArUco detection with fallback to square markers.
 
 ### Phase 2: Advanced Features
-- [ ] **Lens Distortion Correction:** Use the 10mm grid to calculate and apply radial distortion coefficients.
 - [x] **Bean Analysis:** Size + roast color analysis working end-to-end.
 - [x] **Particle Size Analysis:** Implemented end-to-end (contrast+sharpen > threshold > contour detection > ellipse fitting).
 - [x] **Particle Statistics:** Available mass, extraction yield, configurable histogram (12 modes), outlier filtering, peak (mode) diameter.
-- [ ] **Camera Capture:** Add live camera capture UI (instead of file upload) for mobile PWA.
 
 ### Phase 3: Backend & Data
-- [x] **Database (prototype):** Supabase tables for users/beans/brews/grinders/particle sizes.
-- [x] **Auth (prototype):** Simple id/password signup+login (salted hash).
+- [x] **Database:** Supabase tables for beans/brews/grinders/particle sizes.
+- [x] **Auth:** Supabase Auth signup/login integrated in app.
 - [x] **Logging:** Bean + brew logging with autocomplete suggestions.
 - [x] **Grinder particle size mapping:** Save/search per grinder setting, auto-populated from analysis.
 - [x] **History filters:** Filter panel with autocomplete text fields + SCA flavor wheel pickers with hierarchical prefix matching.
 - [x] **Normalized flavor note tables:** `bean_flavor_notes` / `brew_flavor_notes` junction tables for efficient hierarchical filtering.
 - [x] **Autocomplete inputs:** Reusable component used across New Brew, Analysis, and History pages.
 - [ ] **Save/load beans:** Allow saving beans and selecting from existing beans.
-- [ ] **Harden security:** Move to Supabase Auth + RLS (or Edge Functions) and remove client-side password verification.
+- [x] **Harden security (phase 1):** Move to Supabase Auth + RLS and remove client-side password verification.
 
 ---
 

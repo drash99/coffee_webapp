@@ -24,9 +24,11 @@ export function SignupPage({ onSignedUp }: Props) {
     } catch (e) {
       if (e instanceof AuthError) {
         if (e.code === 'ID_REQUIRED') setError(t('auth.error.idRequired'));
+        else if (e.code === 'ID_INVALID') setError(t('auth.error.idInvalid'));
         else if (e.code === 'PASSWORD_REQUIRED') setError(t('auth.error.passwordRequired'));
         else if (e.code === 'PASSWORD_MISMATCH') setError(t('auth.error.passwordMismatch'));
         else if (e.code === 'ID_IN_USE') setError(t('auth.error.idInUse'));
+        else if (e.code === 'AUTH_NOT_CONFIRMED') setError(t('auth.error.authNotConfirmed'));
         else if (e.code === 'SUPABASE') setError(t('auth.error.supabase', { message: e.details ?? '' }));
         else setError(t('auth.error.signupFailed'));
       } else {
@@ -92,5 +94,4 @@ export function SignupPage({ onSignedUp }: Props) {
     </div>
   );
 }
-
 

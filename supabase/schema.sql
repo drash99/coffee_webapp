@@ -1,19 +1,10 @@
--- BeanLog (logging) schema for Supabase Postgres
+-- BeanLog logging schema (Supabase Auth + RLS)
 --
--- This app uses a simple, custom “app_users” table (uid/id/salt/hash).
--- For production, prefer Supabase Auth + RLS; this demo setup is intentionally minimal.
-
-create table if not exists public.app_users (
-  uid uuid primary key,
-  id text not null unique,
-  salt text not null,
-  password_hash text not null,
-  created_at timestamptz not null default now()
-);
+-- Requires Supabase Auth. Tables are scoped by auth.uid() via user_uid + RLS.
 
 create table if not exists public.beans (
   uid uuid primary key,
-  user_uid uuid not null references public.app_users(uid) on delete cascade,
+  user_uid uuid not null default auth.uid() references auth.users(id) on delete cascade,
   bean_name text,
   roastery text,
   producer text,
@@ -29,7 +20,7 @@ create table if not exists public.beans (
 
 create table if not exists public.grinders (
   uid uuid primary key,
-  user_uid uuid not null references public.app_users(uid) on delete cascade,
+  user_uid uuid not null default auth.uid() references auth.users(id) on delete cascade,
   maker text,
   model text,
   created_at timestamptz not null default now()
@@ -37,7 +28,7 @@ create table if not exists public.grinders (
 
 create table if not exists public.brews (
   uid uuid primary key,
-  user_uid uuid not null references public.app_users(uid) on delete cascade,
+  user_uid uuid not null default auth.uid() references auth.users(id) on delete cascade,
   brew_date timestamptz not null,
   bean_uid uuid not null references public.beans(uid) on delete cascade,
   grinder_uid uuid references public.grinders(uid) on delete set null,
@@ -58,15 +49,12 @@ create table if not exists public.brews (
 
 create table if not exists public.grinder_particle_sizes (
   uid uuid primary key,
-  user_uid uuid not null references public.app_users(uid) on delete cascade,
+  user_uid uuid not null default auth.uid() references auth.users(id) on delete cascade,
   grinder_uid uuid not null references public.grinders(uid) on delete cascade,
   grinder_setting text not null,
   particle_median_um numeric not null,
   created_at timestamptz not null default now()
 );
-
--- Normalized flavor-note junction tables for efficient hierarchical filtering.
--- l1/l2/l3 = SCA Flavor Wheel hierarchy levels.  l1 always set; l2/l3 nullable.
 
 create table if not exists public.bean_flavor_notes (
   id bigserial primary key,
@@ -96,4 +84,108 @@ create index if not exists bean_flavor_notes_l1_idx   on public.bean_flavor_note
 create index if not exists brew_flavor_notes_brew_idx on public.brew_flavor_notes(brew_uid);
 create index if not exists brew_flavor_notes_l1_idx   on public.brew_flavor_notes(l1);
 
+-- Backfill user_uid from auth context if omitted by client.
+create or replace function public.set_user_uid_from_auth()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if new.user_uid is null then
+    new.user_uid := auth.uid();
+  end if;
+  return new;
+end;
+$$;
 
+drop trigger if exists set_user_uid_beans on public.beans;
+create trigger set_user_uid_beans
+before insert on public.beans
+for each row execute function public.set_user_uid_from_auth();
+
+drop trigger if exists set_user_uid_grinders on public.grinders;
+create trigger set_user_uid_grinders
+before insert on public.grinders
+for each row execute function public.set_user_uid_from_auth();
+
+drop trigger if exists set_user_uid_brews on public.brews;
+create trigger set_user_uid_brews
+before insert on public.brews
+for each row execute function public.set_user_uid_from_auth();
+
+drop trigger if exists set_user_uid_grinder_particle_sizes on public.grinder_particle_sizes;
+create trigger set_user_uid_grinder_particle_sizes
+before insert on public.grinder_particle_sizes
+for each row execute function public.set_user_uid_from_auth();
+
+alter table public.beans enable row level security;
+alter table public.grinders enable row level security;
+alter table public.brews enable row level security;
+alter table public.grinder_particle_sizes enable row level security;
+alter table public.bean_flavor_notes enable row level security;
+alter table public.brew_flavor_notes enable row level security;
+
+drop policy if exists beans_own_rows on public.beans;
+create policy beans_own_rows on public.beans
+for all
+using (user_uid = auth.uid())
+with check (user_uid = auth.uid());
+
+drop policy if exists grinders_own_rows on public.grinders;
+create policy grinders_own_rows on public.grinders
+for all
+using (user_uid = auth.uid())
+with check (user_uid = auth.uid());
+
+drop policy if exists brews_own_rows on public.brews;
+create policy brews_own_rows on public.brews
+for all
+using (user_uid = auth.uid())
+with check (user_uid = auth.uid());
+
+drop policy if exists grinder_particle_sizes_own_rows on public.grinder_particle_sizes;
+create policy grinder_particle_sizes_own_rows on public.grinder_particle_sizes
+for all
+using (user_uid = auth.uid())
+with check (user_uid = auth.uid());
+
+drop policy if exists bean_flavor_notes_by_owned_bean on public.bean_flavor_notes;
+create policy bean_flavor_notes_by_owned_bean on public.bean_flavor_notes
+for all
+using (
+  exists (
+    select 1
+    from public.beans b
+    where b.uid = bean_flavor_notes.bean_uid
+      and b.user_uid = auth.uid()
+  )
+)
+with check (
+  exists (
+    select 1
+    from public.beans b
+    where b.uid = bean_flavor_notes.bean_uid
+      and b.user_uid = auth.uid()
+  )
+);
+
+drop policy if exists brew_flavor_notes_by_owned_brew on public.brew_flavor_notes;
+create policy brew_flavor_notes_by_owned_brew on public.brew_flavor_notes
+for all
+using (
+  exists (
+    select 1
+    from public.brews br
+    where br.uid = brew_flavor_notes.brew_uid
+      and br.user_uid = auth.uid()
+  )
+)
+with check (
+  exists (
+    select 1
+    from public.brews br
+    where br.uid = brew_flavor_notes.brew_uid
+      and br.user_uid = auth.uid()
+  )
+);

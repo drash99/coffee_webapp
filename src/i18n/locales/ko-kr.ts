@@ -35,10 +35,12 @@ export const koKR: Record<keyof typeof enUS, string> = {
   'auth.error.loginFailed': '로그인에 실패했습니다.',
   'auth.error.signupFailed': '회원가입에 실패했습니다.',
   'auth.error.idRequired': '아이디를 입력해주세요.',
+  'auth.error.idInvalid': '아이디는 영문, 숫자, 점(.), 밑줄(_), 하이픈(-)만 사용할 수 있습니다.',
   'auth.error.passwordRequired': '비밀번호를 입력해주세요.',
   'auth.error.passwordMismatch': '비밀번호가 일치하지 않습니다.',
   'auth.error.idInUse': '이미 사용 중인 아이디입니다.',
   'auth.error.invalidCredentials': '아이디 또는 비밀번호가 올바르지 않습니다.',
+  'auth.error.authNotConfirmed': 'Supabase Auth에서 이메일 확인 설정이 필요합니다.',
   'auth.error.supabase': '서버 오류: {message}',
 
   // Logging app
@@ -50,6 +52,11 @@ export const koKR: Record<keyof typeof enUS, string> = {
   // New brew: sections
   'newBrew.bean.title': '원두',
   'newBrew.brew.title': '브루',
+  'newBrew.bean.savedList': '저장된 원두',
+  'newBrew.bean.savedList.none': '새 원두 (선택 안 함)',
+  'newBrew.bean.save': '원두 저장',
+  'newBrew.bean.save.saving': '원두 저장 중…',
+  'newBrew.bean.saved': '원두 저장 완료!',
   'newBrew.save': '저장',
   'newBrew.save.saving': '저장 중…',
   'newBrew.saved': '저장 완료!',
@@ -146,6 +153,15 @@ export const koKR: Record<keyof typeof enUS, string> = {
   'history.detail.tasteNotesSca': '테이스트 노트 (SCA)',
   'history.detail.extractionNote': '추출 노트',
   'history.detail.tasteNote': '테이스트 노트 (자유 작성)',
+  'history.edit.start': '브루 수정',
+  'history.edit.cancel': '취소',
+  'history.edit.save': '변경사항 저장',
+  'history.edit.saving': '저장 중…',
+  'history.sort.label': '정렬',
+  'history.sort.dateDesc': '날짜 (최신순)',
+  'history.sort.dateAsc': '날짜 (오래된순)',
+  'history.sort.ratingDesc': '평점 (높은순)',
+  'history.sort.ratingAsc': '평점 (낮은순)',
 
   // Flavor wheel picker
   'flavorPicker.addNote': '노트 추가',
@@ -223,5 +239,3 @@ export const koKR: Record<keyof typeof enUS, string> = {
   'results.alt.stageParticles': '스테이지(입자 윤곽)',
   'results.alt.stageBeans': '스테이지(원두 윤곽)',
 };
-
-

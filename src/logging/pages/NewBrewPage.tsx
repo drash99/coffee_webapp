@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { AppUser } from '../../auth/types';
 import { getSupabaseClient } from '../../config/supabase';
 import { FlavorWheelPicker } from '../components/FlavorWheelPicker';
@@ -11,6 +11,20 @@ import { useI18n } from '../../i18n/I18nProvider';
 
 type Props = {
   user: AppUser;
+};
+
+type SavedBeanOption = {
+  uid: string;
+  bean_name: string | null;
+  roastery: string | null;
+  producer: string | null;
+  origin_location: string | null;
+  origin_country: string | null;
+  process: string | null;
+  varietal: string | null;
+  cup_notes: string | null;
+  cup_flavor_notes: FlavorNote[] | null;
+  roasted_on: string | null;
 };
 
 function toNullableNumber(input: string): number | null {
@@ -32,20 +46,41 @@ function fToC(f: number): number {
   return ((f - 32) * 5) / 9;
 }
 
+const emptyBean: BeanInput = {
+  bean_name: '',
+  roastery: '',
+  producer: '',
+  origin_location: '',
+  origin_country: '',
+  process: '',
+  varietal: '',
+  cup_notes: '',
+  cup_flavor_notes: [],
+  roasted_on: ''
+};
+
+function beanDisplayLabel(bean: SavedBeanOption, fallback: string): string {
+  const title =
+    bean.bean_name?.trim() ||
+    bean.roastery?.trim() ||
+    bean.origin_location?.trim() ||
+    bean.origin_country?.trim() ||
+    fallback;
+  const origin = [bean.origin_location, bean.origin_country].filter(Boolean).join(', ');
+  const roastery = bean.roastery?.trim();
+  if (roastery && origin) return `${title} — ${roastery} (${origin})`;
+  if (roastery) return `${title} — ${roastery}`;
+  if (origin) return `${title} (${origin})`;
+  return title;
+}
+
 export function NewBrewPage({ user }: Props) {
   const { t } = useI18n();
-  const [bean, setBean] = useState<BeanInput>({
-    bean_name: '',
-    roastery: '',
-    producer: '',
-    origin_location: '',
-    origin_country: '',
-    process: '',
-    varietal: '',
-    cup_notes: '',
-    cup_flavor_notes: [],
-    roasted_on: ''
-  });
+  const [bean, setBean] = useState<BeanInput>(emptyBean);
+  const [savedBeans, setSavedBeans] = useState<SavedBeanOption[]>([]);
+  const [selectedBeanUid, setSelectedBeanUid] = useState('');
+  const [beanSaving, setBeanSaving] = useState(false);
+  const [beanMsg, setBeanMsg] = useState<string | null>(null);
 
   const [grinder, setGrinder] = useState<GrinderInput>({
     maker: '',
@@ -91,6 +126,26 @@ export function NewBrewPage({ user }: Props) {
       return null;
     }
   }, [brew.brew_date]);
+
+  async function loadSavedBeans() {
+    const supabase = getSupabaseClient();
+    const { data, error: qErr } = await supabase
+      .from('beans')
+      .select(
+        'uid,bean_name,roastery,producer,origin_location,origin_country,process,varietal,cup_notes,cup_flavor_notes,roasted_on'
+      )
+      .eq('user_uid', user.uid)
+      .order('created_at', { ascending: false });
+    if (qErr) throw new Error(qErr.message);
+    setSavedBeans((data ?? []) as SavedBeanOption[]);
+  }
+
+  useEffect(() => {
+    void loadSavedBeans().catch((e) => {
+      setBeanMsg(e instanceof Error ? e.message : t('common.loadFailed'));
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user.uid]);
 
   async function getOrCreateGrinderUid(makerRaw: string, modelRaw: string): Promise<string> {
     const maker = makerRaw.trim();
@@ -154,6 +209,85 @@ export function NewBrewPage({ user }: Props) {
     }
   }
 
+  async function syncBeanFlavorNotes(beanUid: string, notes: FlavorNote[]) {
+    const supabase = getSupabaseClient();
+    const { error: deleteErr } = await supabase.from('bean_flavor_notes').delete().eq('bean_uid', beanUid);
+    if (deleteErr) throw new Error(deleteErr.message);
+    if (notes.length === 0) return;
+    const rows = notes.map((n) => ({
+      bean_uid: beanUid,
+      l1: n.path[0] ?? '',
+      l2: n.path[1] ?? null,
+      l3: n.path[2] ?? null,
+      color: n.color
+    }));
+    const { error: insErr } = await supabase.from('bean_flavor_notes').insert(rows);
+    if (insErr) throw new Error(insErr.message);
+  }
+
+  function beanPayload() {
+    return {
+      bean_name: bean.bean_name || null,
+      roastery: bean.roastery || null,
+      producer: bean.producer || null,
+      origin_location: bean.origin_location || null,
+      origin_country: bean.origin_country || null,
+      process: bean.process || null,
+      varietal: bean.varietal || null,
+      cup_notes: bean.cup_notes || null,
+      cup_flavor_notes: (bean.cup_flavor_notes as FlavorNote[]) || [],
+      roasted_on: bean.roasted_on || null
+    };
+  }
+
+  async function resolveBeanUidForBrew(): Promise<string> {
+    const supabase = getSupabaseClient();
+    if (selectedBeanUid) {
+      const { error: updErr } = await supabase.from('beans').update(beanPayload()).eq('uid', selectedBeanUid);
+      if (updErr) throw new Error(updErr.message);
+      await syncBeanFlavorNotes(selectedBeanUid, bean.cup_flavor_notes);
+      return selectedBeanUid;
+    }
+    const bean_uid = crypto.randomUUID();
+    const { error: beanErr } = await supabase.from('beans').insert({
+      uid: bean_uid,
+      user_uid: user.uid,
+      ...beanPayload()
+    });
+    if (beanErr) throw new Error(beanErr.message);
+    await syncBeanFlavorNotes(bean_uid, bean.cup_flavor_notes);
+    return bean_uid;
+  }
+
+  async function saveBeanOnly() {
+    setBeanMsg(null);
+    setBeanSaving(true);
+    try {
+      const supabase = getSupabaseClient();
+      let beanUid = selectedBeanUid;
+      if (beanUid) {
+        const { error: updErr } = await supabase.from('beans').update(beanPayload()).eq('uid', beanUid);
+        if (updErr) throw new Error(updErr.message);
+      } else {
+        beanUid = crypto.randomUUID();
+        const { error: insErr } = await supabase.from('beans').insert({
+          uid: beanUid,
+          user_uid: user.uid,
+          ...beanPayload()
+        });
+        if (insErr) throw new Error(insErr.message);
+      }
+      await syncBeanFlavorNotes(beanUid, bean.cup_flavor_notes);
+      await loadSavedBeans();
+      setSelectedBeanUid(beanUid);
+      setBeanMsg(t('newBrew.bean.saved'));
+    } catch (e) {
+      setBeanMsg(e instanceof Error ? e.message : t('newBrew.error.saveFailed'));
+    } finally {
+      setBeanSaving(false);
+    }
+  }
+
   async function searchParticleSizes() {
     setMapMsg(null);
     setSearchRows([]);
@@ -187,37 +321,8 @@ export function NewBrewPage({ user }: Props) {
     try {
       const supabase = getSupabaseClient();
 
-      const bean_uid = crypto.randomUUID();
+      const bean_uid = await resolveBeanUidForBrew();
       const brew_uid = crypto.randomUUID();
-
-      const { error: beanErr } = await supabase.from('beans').insert({
-        uid: bean_uid,
-        user_uid: user.uid,
-        bean_name: bean.bean_name || null,
-        roastery: bean.roastery || null,
-        producer: bean.producer || null,
-        origin_location: bean.origin_location || null,
-        origin_country: bean.origin_country || null,
-        process: bean.process || null,
-        varietal: bean.varietal || null,
-        cup_notes: bean.cup_notes || null,
-        cup_flavor_notes: (bean.cup_flavor_notes as FlavorNote[]) || [],
-        roasted_on: bean.roasted_on || null
-      });
-      if (beanErr) throw new Error(beanErr.message);
-
-      // Insert normalized bean flavor notes for efficient hierarchical filtering
-      if (bean.cup_flavor_notes.length > 0) {
-        const beanNoteRows = bean.cup_flavor_notes.map((n) => ({
-          bean_uid,
-          l1: n.path[0] ?? '',
-          l2: n.path[1] ?? null,
-          l3: n.path[2] ?? null,
-          color: n.color
-        }));
-        const { error: bfnErr } = await supabase.from('bean_flavor_notes').insert(beanNoteRows);
-        if (bfnErr) throw new Error(bfnErr.message);
-      }
 
       const grinder_uid =
         grinder.maker.trim() && grinder.model.trim() ? await getOrCreateGrinderUid(grinder.maker, grinder.model) : null;
@@ -261,19 +366,11 @@ export function NewBrewPage({ user }: Props) {
       }
 
       setOk(t('newBrew.saved'));
-      // Keep brew date, clear the rest for convenience
-      setBean({
-        bean_name: '',
-        roastery: '',
-        producer: '',
-        origin_location: '',
-        origin_country: '',
-        process: '',
-        varietal: '',
-        cup_notes: '',
-        cup_flavor_notes: [],
-        roasted_on: ''
-      });
+      await loadSavedBeans();
+      // Keep brew date and selected bean, clear brew-centric fields for convenience
+      if (!selectedBeanUid) {
+        setBean(emptyBean);
+      }
       setGrinder({ maker: '', model: '', setting: '' });
       setBrew((prev) => ({
         ...prev,
@@ -302,6 +399,55 @@ export function NewBrewPage({ user }: Props) {
     <div className="space-y-6">
       <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 space-y-4">
         <h2 className="text-lg font-semibold">{t('newBrew.bean.title')}</h2>
+
+        <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-2 items-end">
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">{t('newBrew.bean.savedList')}</label>
+            <select
+              className="w-full p-2 border rounded-lg bg-white"
+              value={selectedBeanUid}
+              onChange={(e) => {
+                const nextUid = e.target.value;
+                setSelectedBeanUid(nextUid);
+                setBeanMsg(null);
+                if (!nextUid) {
+                  setBean(emptyBean);
+                  return;
+                }
+                const found = savedBeans.find((b) => b.uid === nextUid);
+                if (!found) return;
+                setBean({
+                  bean_name: found.bean_name ?? '',
+                  roastery: found.roastery ?? '',
+                  producer: found.producer ?? '',
+                  origin_location: found.origin_location ?? '',
+                  origin_country: found.origin_country ?? '',
+                  process: found.process ?? '',
+                  varietal: found.varietal ?? '',
+                  cup_notes: found.cup_notes ?? '',
+                  cup_flavor_notes: (found.cup_flavor_notes ?? []) as FlavorNote[],
+                  roasted_on: found.roasted_on ?? ''
+                });
+              }}
+            >
+              <option value="">{t('newBrew.bean.savedList.none')}</option>
+              {savedBeans.map((b) => (
+                <option key={b.uid} value={b.uid}>
+                  {beanDisplayLabel(b, t('history.bean.fallbackLabel'))}
+                </option>
+              ))}
+            </select>
+          </div>
+          <button
+            type="button"
+            className="px-3 py-2 rounded-lg border bg-white text-sm hover:bg-gray-50 disabled:bg-gray-100"
+            onClick={saveBeanOnly}
+            disabled={beanSaving}
+          >
+            {beanSaving ? t('newBrew.bean.save.saving') : t('newBrew.bean.save')}
+          </button>
+        </div>
+        {beanMsg && <div className="text-xs text-gray-600">{beanMsg}</div>}
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div className="sm:col-span-2">
@@ -625,5 +771,4 @@ export function NewBrewPage({ user }: Props) {
     </div>
   );
 }
-
 

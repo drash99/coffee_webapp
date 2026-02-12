@@ -1,30 +1,21 @@
--- DANGEROUS: Wipes all logging/auth data for this app in the Supabase project.
+-- DANGEROUS: Wipes all logging data for this app in the Supabase project.
 -- Run this only if you are OK losing existing data.
 
 -- Drop in dependency order
+
 drop table if exists public.brew_flavor_notes cascade;
 drop table if exists public.bean_flavor_notes cascade;
 drop table if exists public.grinder_particle_sizes cascade;
 drop table if exists public.brews cascade;
 drop table if exists public.beans cascade;
 drop table if exists public.grinders cascade;
-drop table if exists public.app_users cascade;
+drop function if exists public.set_user_uid_from_auth() cascade;
 
--- ============================================================
--- Recreate (clean schema)
--- ============================================================
-
-create table public.app_users (
-  uid uuid primary key,
-  id text not null unique,
-  salt text not null,
-  password_hash text not null,
-  created_at timestamptz not null default now()
-);
+-- Recreate secure schema (Supabase Auth + RLS)
 
 create table public.beans (
   uid uuid primary key,
-  user_uid uuid not null references public.app_users(uid) on delete cascade,
+  user_uid uuid not null default auth.uid() references auth.users(id) on delete cascade,
   bean_name text,
   roastery text,
   producer text,
@@ -40,15 +31,15 @@ create table public.beans (
 
 create table public.grinders (
   uid uuid primary key,
-  user_uid uuid not null references public.app_users(uid) on delete cascade,
-  maker text not null,
-  model text not null,
+  user_uid uuid not null default auth.uid() references auth.users(id) on delete cascade,
+  maker text,
+  model text,
   created_at timestamptz not null default now()
 );
 
 create table public.brews (
   uid uuid primary key,
-  user_uid uuid not null references public.app_users(uid) on delete cascade,
+  user_uid uuid not null default auth.uid() references auth.users(id) on delete cascade,
   brew_date timestamptz not null,
   bean_uid uuid not null references public.beans(uid) on delete cascade,
   grinder_uid uuid references public.grinders(uid) on delete set null,
@@ -69,15 +60,12 @@ create table public.brews (
 
 create table public.grinder_particle_sizes (
   uid uuid primary key,
-  user_uid uuid not null references public.app_users(uid) on delete cascade,
+  user_uid uuid not null default auth.uid() references auth.users(id) on delete cascade,
   grinder_uid uuid not null references public.grinders(uid) on delete cascade,
   grinder_setting text not null,
   particle_median_um numeric not null,
   created_at timestamptz not null default now()
 );
-
--- Normalized flavor-note junction tables for efficient hierarchical filtering.
--- l1/l2/l3 = SCA Flavor Wheel hierarchy levels.  l1 always set; l2/l3 nullable.
 
 create table public.bean_flavor_notes (
   id bigserial primary key,
@@ -97,7 +85,6 @@ create table public.brew_flavor_notes (
   color text not null default '#6b7280'
 );
 
--- Indexes
 create index brews_user_uid_brew_date_idx on public.brews(user_uid, brew_date desc);
 create index beans_user_uid_created_at_idx on public.beans(user_uid, created_at desc);
 create index grinders_user_uid_created_at_idx on public.grinders(user_uid, created_at desc);
@@ -108,5 +95,93 @@ create index bean_flavor_notes_l1_idx   on public.bean_flavor_notes(l1);
 create index brew_flavor_notes_brew_idx on public.brew_flavor_notes(brew_uid);
 create index brew_flavor_notes_l1_idx   on public.brew_flavor_notes(l1);
 
--- Refresh PostgREST schema cache if needed:
--- notify pgrst, 'reload schema';
+create or replace function public.set_user_uid_from_auth()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if new.user_uid is null then
+    new.user_uid := auth.uid();
+  end if;
+  return new;
+end;
+$$;
+
+create trigger set_user_uid_beans
+before insert on public.beans
+for each row execute function public.set_user_uid_from_auth();
+
+create trigger set_user_uid_grinders
+before insert on public.grinders
+for each row execute function public.set_user_uid_from_auth();
+
+create trigger set_user_uid_brews
+before insert on public.brews
+for each row execute function public.set_user_uid_from_auth();
+
+create trigger set_user_uid_grinder_particle_sizes
+before insert on public.grinder_particle_sizes
+for each row execute function public.set_user_uid_from_auth();
+
+alter table public.beans enable row level security;
+alter table public.grinders enable row level security;
+alter table public.brews enable row level security;
+alter table public.grinder_particle_sizes enable row level security;
+alter table public.bean_flavor_notes enable row level security;
+alter table public.brew_flavor_notes enable row level security;
+
+create policy beans_own_rows on public.beans
+for all
+using (user_uid = auth.uid())
+with check (user_uid = auth.uid());
+
+create policy grinders_own_rows on public.grinders
+for all
+using (user_uid = auth.uid())
+with check (user_uid = auth.uid());
+
+create policy brews_own_rows on public.brews
+for all
+using (user_uid = auth.uid())
+with check (user_uid = auth.uid());
+
+create policy grinder_particle_sizes_own_rows on public.grinder_particle_sizes
+for all
+using (user_uid = auth.uid())
+with check (user_uid = auth.uid());
+
+create policy bean_flavor_notes_by_owned_bean on public.bean_flavor_notes
+for all
+using (
+  exists (
+    select 1 from public.beans b
+    where b.uid = bean_flavor_notes.bean_uid
+      and b.user_uid = auth.uid()
+  )
+)
+with check (
+  exists (
+    select 1 from public.beans b
+    where b.uid = bean_flavor_notes.bean_uid
+      and b.user_uid = auth.uid()
+  )
+);
+
+create policy brew_flavor_notes_by_owned_brew on public.brew_flavor_notes
+for all
+using (
+  exists (
+    select 1 from public.brews br
+    where br.uid = brew_flavor_notes.brew_uid
+      and br.user_uid = auth.uid()
+  )
+)
+with check (
+  exists (
+    select 1 from public.brews br
+    where br.uid = brew_flavor_notes.brew_uid
+      and br.user_uid = auth.uid()
+  )
+);
