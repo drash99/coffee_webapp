@@ -3,7 +3,7 @@ import { isSupabaseConfigured } from '../config/supabase';
 import type { AppUser } from '../auth/types';
 import { getSupabaseClient } from '../config/supabase';
 import { logout } from '../auth/authService';
-import { clearSession, loadSessionFromSupabase, saveSession } from './session';
+import { clearSession, loadSessionFromSupabase, saveSession, toSessionUser } from './session';
 import { LoginPage } from './pages/LoginPage';
 import { SignupPage } from './pages/SignupPage';
 import { NewBrewPage } from './pages/NewBrewPage';
@@ -54,8 +54,9 @@ export function LoggingApp() {
           setUser(null);
           return;
         }
-        const next = await loadSessionFromSupabase();
-        if (next) setUser(next);
+        const next = toSessionUser(session.user);
+        saveSession(next);
+        setUser(next);
       });
       unsubscribe = () => authSub.subscription.unsubscribe();
     }

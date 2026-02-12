@@ -50,6 +50,18 @@ function userToAppUser(user: { id: string; email?: string | null; user_metadata?
   return { uid: user.id, id: loginId };
 }
 
+async function withTimeout<T>(promise: Promise<T>, ms = 15000): Promise<T> {
+  let timer: number | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = window.setTimeout(() => reject(new AuthError('SUPABASE', 'Request timed out.')), ms);
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    if (timer != null) window.clearTimeout(timer);
+  }
+}
+
 export async function signup(input: SignupInput): Promise<AppUser> {
   const supabase = getSupabaseClient();
   const id = normalizeId(input.id);
@@ -59,28 +71,35 @@ export async function signup(input: SignupInput): Promise<AppUser> {
   if (input.password !== input.password2) throw new AuthError('PASSWORD_MISMATCH');
 
   const email = idToEmail(id);
-  const { error: signUpErr } = await supabase.auth.signUp({
-    email,
-    password: input.password,
-    options: { data: { login_id: id } }
-  });
+  const { data: signUpData, error: signUpErr } = await withTimeout(
+    supabase.auth.signUp({
+      email,
+      password: input.password,
+      options: { data: { login_id: id } }
+    })
+  );
   if (signUpErr) {
     const msg = signUpErr.message.toLowerCase();
     if (msg.includes('already') || msg.includes('registered')) throw new AuthError('ID_IN_USE');
     throw new AuthError('SUPABASE', signUpErr.message);
   }
 
-  const { data: loginData, error: loginErr } = await supabase.auth.signInWithPassword({
-    email,
-    password: input.password
-  });
-  if (loginErr) {
-    const msg = loginErr.message.toLowerCase();
-    if (msg.includes('email not confirmed')) throw new AuthError('AUTH_NOT_CONFIRMED');
-    throw new AuthError('SUPABASE', loginErr.message);
+  // If session is missing, try explicit sign-in once.
+  // Some projects may still return no session depending on auth settings.
+  if (!signUpData.session) {
+    const { data: loginData, error: loginErr } = await withTimeout(
+      supabase.auth.signInWithPassword({ email, password: input.password })
+    );
+    if (loginErr) {
+      const msg = loginErr.message.toLowerCase();
+      if (msg.includes('email not confirmed')) throw new AuthError('AUTH_NOT_CONFIRMED');
+      throw new AuthError('SUPABASE', loginErr.message);
+    }
+    if (!loginData.user) throw new AuthError('SUPABASE', 'Signup succeeded but no user returned.');
+    return userToAppUser(loginData.user);
   }
 
-  const user = loginData.user;
+  const user = signUpData.user ?? signUpData.session.user ?? null;
   if (!user) throw new AuthError('SUPABASE', 'Signup succeeded but no user returned.');
   return userToAppUser(user);
 }
@@ -92,10 +111,12 @@ export async function login(input: LoginInput): Promise<AppUser> {
   if (!ID_PATTERN.test(id)) throw new AuthError('ID_INVALID');
   if (!input.password) throw new AuthError('PASSWORD_REQUIRED');
 
-  const { data, error } = await supabase.auth.signInWithPassword({
-    email: idToEmail(id),
-    password: input.password
-  });
+  const { data, error } = await withTimeout(
+    supabase.auth.signInWithPassword({
+      email: idToEmail(id),
+      password: input.password
+    })
+  );
   if (error) {
     const msg = error.message.toLowerCase();
     if (msg.includes('invalid login credentials')) throw new AuthError('INVALID_CREDENTIALS');
@@ -112,4 +133,3 @@ export async function logout(): Promise<void> {
   const { error } = await supabase.auth.signOut();
   if (error) throw new AuthError('SUPABASE', error.message);
 }
-

@@ -30,13 +30,23 @@ function toAppUser(user: { id: string; email?: string | null; user_metadata?: Re
   return { uid: user.id, id: loginId };
 }
 
+export function toSessionUser(user: { id: string; email?: string | null; user_metadata?: Record<string, any> }): AppUser {
+  return toAppUser(user);
+}
+
 export async function loadSessionFromSupabase(): Promise<AppUser | null> {
   if (!isSupabaseConfigured()) return null;
   const supabase = getSupabaseClient();
+  const { data: sessionData } = await supabase.auth.getSession();
+  if (sessionData.session?.user) {
+    const user = toAppUser(sessionData.session.user);
+    saveSession(user);
+    return user;
+  }
+
   const { data, error } = await supabase.auth.getUser();
   if (error || !data.user) return null;
   const user = toAppUser(data.user);
   saveSession(user);
   return user;
 }
-
