@@ -288,7 +288,6 @@ export function HistoryPage({ user }: Props) {
         .select(
           `
           uid,
-          user_uid,
           brew_date,
           bean_uid,
           recipe,
@@ -309,7 +308,6 @@ export function HistoryPage({ user }: Props) {
           grinders ( uid, maker, model )
         `
         )
-        .eq('user_uid', user.uid)
         .order('brew_date', { ascending: false });
       if (err) throw new Error(err.message);
       setRows((data ?? []) as unknown as BrewWithBean[]);
@@ -326,7 +324,6 @@ export function HistoryPage({ user }: Props) {
     const { data, error: beanErr } = await supabase
       .from('beans')
       .select('uid,bean_name,roastery,producer,origin_location,origin_country,process,varietal,roasted_on,cup_flavor_notes')
-      .eq('user_uid', user.uid)
       .order('created_at', { ascending: false });
     if (beanErr) throw new Error(beanErr.message);
     setSavedBeans((data ?? []) as SavedBeanOption[]);
@@ -343,7 +340,6 @@ export function HistoryPage({ user }: Props) {
     const { data: found, error: foundErr } = await supabase
       .from('grinders')
       .select('uid')
-      .eq('user_uid', user.uid)
       .ilike('maker', maker)
       .ilike('model', model)
       .maybeSingle();
@@ -353,7 +349,6 @@ export function HistoryPage({ user }: Props) {
     const uid = crypto.randomUUID();
     const { error: insertErr } = await supabase.from('grinders').insert({
       uid,
-      user_uid: user.uid,
       maker,
       model
     });

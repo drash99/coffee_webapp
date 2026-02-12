@@ -134,7 +134,6 @@ export function NewBrewPage({ user }: Props) {
       .select(
         'uid,bean_name,roastery,producer,origin_location,origin_country,process,varietal,cup_notes,cup_flavor_notes,roasted_on'
       )
-      .eq('user_uid', user.uid)
       .order('created_at', { ascending: false });
     if (qErr) throw new Error(qErr.message);
     setSavedBeans((data ?? []) as SavedBeanOption[]);
@@ -158,7 +157,6 @@ export function NewBrewPage({ user }: Props) {
     const { data: found, error: foundErr } = await supabase
       .from('grinders')
       .select('uid')
-      .eq('user_uid', user.uid)
       .ilike('maker', maker)
       .ilike('model', model)
       .maybeSingle();
@@ -168,7 +166,6 @@ export function NewBrewPage({ user }: Props) {
     const uid = crypto.randomUUID();
     const { error: insertErr } = await supabase.from('grinders').insert({
       uid,
-      user_uid: user.uid,
       maker,
       model
     });
@@ -195,7 +192,6 @@ export function NewBrewPage({ user }: Props) {
       const grinder_uid = await getOrCreateGrinderUid(grinder.maker, grinder.model);
       const { error: insErr } = await supabase.from('grinder_particle_sizes').insert({
         uid: crypto.randomUUID(),
-        user_uid: user.uid,
         grinder_uid,
         grinder_setting: setting,
         particle_median_um: median
@@ -251,7 +247,6 @@ export function NewBrewPage({ user }: Props) {
     const bean_uid = crypto.randomUUID();
     const { error: beanErr } = await supabase.from('beans').insert({
       uid: bean_uid,
-      user_uid: user.uid,
       ...beanPayload()
     });
     if (beanErr) throw new Error(beanErr.message);
@@ -272,7 +267,6 @@ export function NewBrewPage({ user }: Props) {
         beanUid = crypto.randomUUID();
         const { error: insErr } = await supabase.from('beans').insert({
           uid: beanUid,
-          user_uid: user.uid,
           ...beanPayload()
         });
         if (insErr) throw new Error(insErr.message);
@@ -298,7 +292,6 @@ export function NewBrewPage({ user }: Props) {
       const { data, error: qErr } = await supabase
         .from('grinder_particle_sizes')
         .select('grinder_setting,particle_median_um')
-        .eq('user_uid', user.uid)
         .eq('grinder_uid', grinder_uid);
       if (qErr) throw new Error(qErr.message);
       setSearchRows((data ?? []) as Array<{ grinder_setting: string; particle_median_um: number }>);
@@ -333,7 +326,6 @@ export function NewBrewPage({ user }: Props) {
 
       const { error: brewErr } = await supabase.from('brews').insert({
         uid: brew_uid,
-        user_uid: user.uid,
         brew_date: brewDateIso,
         bean_uid,
         grinder_uid,
@@ -771,4 +763,3 @@ export function NewBrewPage({ user }: Props) {
     </div>
   );
 }
-

@@ -29,7 +29,6 @@ export function useGrinderSuggestions(userUid: string | undefined) {
         const { data, error } = await supabase
           .from('grinders')
           .select('maker, model')
-          .eq('user_uid', userUid)
           .order('created_at', { ascending: false });
 
         if (error) {

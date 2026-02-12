@@ -34,7 +34,6 @@ export function useBeanSuggestions(userUid: string | undefined) {
         const { data, error } = await supabase
           .from('beans')
           .select('roastery, origin_country, origin_location, producer, varietal')
-          .eq('user_uid', userUid)
           .order('created_at', { ascending: false });
 
         if (error) {

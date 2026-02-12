@@ -3,7 +3,7 @@ import { isSupabaseConfigured } from '../config/supabase';
 import type { AppUser } from '../auth/types';
 import { getSupabaseClient } from '../config/supabase';
 import { logout } from '../auth/authService';
-import { clearSession, loadSession, loadSessionFromSupabase, saveSession } from './session';
+import { clearSession, loadSessionFromSupabase, saveSession } from './session';
 import { LoginPage } from './pages/LoginPage';
 import { SignupPage } from './pages/SignupPage';
 import { NewBrewPage } from './pages/NewBrewPage';
@@ -34,13 +34,14 @@ export function LoggingApp() {
   const [logTab, setLogTab] = useState<LogTab>('new');
 
   useEffect(() => {
-    const cached = loadSession();
-    if (cached) setUser(cached);
-
     let active = true;
     void loadSessionFromSupabase().then((next) => {
       if (!active) return;
       if (next) setUser(next);
+      else {
+        clearSession();
+        setUser(null);
+      }
     });
 
     let unsubscribe: (() => void) | null = null;

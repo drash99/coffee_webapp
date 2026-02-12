@@ -221,7 +221,7 @@ export function AnalysisApp() {
     setMedianOverrideUm(String(Math.round(grindModeUm)));
   }, [analysisMode, grindModeUm]);
 
-  async function getOrCreateGrinderUid(userUid: string, makerRaw: string, modelRaw: string): Promise<string> {
+  async function getOrCreateGrinderUid(makerRaw: string, modelRaw: string): Promise<string> {
     const maker = makerRaw.trim();
     const model = modelRaw.trim();
     if (!maker || !model) throw new Error(t('grindMap.error.missingGrinder'));
@@ -230,7 +230,6 @@ export function AnalysisApp() {
     const { data: found, error: foundErr } = await supabase
       .from('grinders')
       .select('uid')
-      .eq('user_uid', userUid)
       .ilike('maker', maker)
       .ilike('model', model)
       .maybeSingle();
@@ -240,7 +239,6 @@ export function AnalysisApp() {
     const uid = crypto.randomUUID();
     const { error: insertErr } = await supabase.from('grinders').insert({
       uid,
-      user_uid: userUid,
       maker,
       model
     });
@@ -281,10 +279,11 @@ export function AnalysisApp() {
     setMapSaving(true);
     try {
       const supabase = getSupabaseClient();
-      const grinder_uid = await getOrCreateGrinderUid(user.uid, grinderMaker, grinderModel);
+      const { data: authData } = await supabase.auth.getUser();
+      if (!authData.user) throw new Error(t('analysis.grindMap.loginRequired'));
+      const grinder_uid = await getOrCreateGrinderUid(grinderMaker, grinderModel);
       const { error: insErr } = await supabase.from('grinder_particle_sizes').insert({
         uid: crypto.randomUUID(),
-        user_uid: user.uid,
         grinder_uid,
         grinder_setting: setting,
         particle_median_um: median
@@ -539,5 +538,3 @@ export function AnalysisApp() {
     </div>
   );
 }
-
-
