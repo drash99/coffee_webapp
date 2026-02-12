@@ -8,10 +8,11 @@ import { LoginPage } from './pages/LoginPage';
 import { SignupPage } from './pages/SignupPage';
 import { NewBrewPage } from './pages/NewBrewPage';
 import { HistoryPage } from './pages/HistoryPage';
+import { BeanHistoryPage } from './pages/BeanHistoryPage';
 import { useI18n } from '../i18n/I18nProvider';
 
 type AuthTab = 'login' | 'signup';
-type LogTab = 'new' | 'history';
+type LogTab = 'new' | 'history' | 'beans';
 
 function TabButton({ active, children, onClick }: { active: boolean; children: ReactNode; onClick: () => void }) {
   return (
@@ -150,9 +151,14 @@ export function LoggingApp() {
         <TabButton active={logTab === 'history'} onClick={() => setLogTab('history')}>
           {t('logging.tab.history')}
         </TabButton>
+        <TabButton active={logTab === 'beans'} onClick={() => setLogTab('beans')}>
+          {t('logging.tab.beans')}
+        </TabButton>
       </div>
 
-      {logTab === 'new' ? <NewBrewPage user={user} /> : <HistoryPage user={user} />}
+      {logTab === 'new' && <NewBrewPage user={user} />}
+      {logTab === 'history' && <HistoryPage user={user} />}
+      {logTab === 'beans' && <BeanHistoryPage user={user} />}
     </div>
   );
 }

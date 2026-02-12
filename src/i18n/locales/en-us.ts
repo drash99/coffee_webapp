@@ -44,6 +44,7 @@ export const enUS = {
   'logging.logout': 'Log out',
   'logging.tab.newBrew': 'New brew',
   'logging.tab.history': 'History',
+  'logging.tab.beans': 'Beans',
 
   // New brew: sections
   'newBrew.bean.title': 'Bean',
@@ -158,6 +159,20 @@ export const enUS = {
   'history.sort.dateAsc': 'Date (oldest)',
   'history.sort.ratingDesc': 'Rating (high to low)',
   'history.sort.ratingAsc': 'Rating (low to high)',
+
+  // Bean history
+  'beanHistory.title': 'Bean history',
+  'beanHistory.refresh': 'Refresh',
+  'beanHistory.refresh.loading': 'Loading…',
+  'beanHistory.empty': 'No beans yet. Save a bean from New brew to see it here.',
+  'beanHistory.list.title': 'Your beans',
+  'beanHistory.selectPrompt': 'Select a bean from the list.',
+  'beanHistory.detail.title': 'Bean details',
+  'beanHistory.edit.title': 'Edit bean',
+  'beanHistory.edit.start': 'Edit bean',
+  'beanHistory.edit.cancel': 'Cancel',
+  'beanHistory.edit.save': 'Save changes',
+  'beanHistory.edit.save.saving': 'Saving…',
 
   // Flavor wheel picker
   'flavorPicker.addNote': 'Add note',

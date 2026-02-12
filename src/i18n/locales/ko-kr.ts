@@ -48,6 +48,7 @@ export const koKR: Record<keyof typeof enUS, string> = {
   'logging.logout': '로그아웃',
   'logging.tab.newBrew': '새 브루',
   'logging.tab.history': '히스토리',
+  'logging.tab.beans': '원두',
 
   // New brew: sections
   'newBrew.bean.title': '원두',
@@ -162,6 +163,20 @@ export const koKR: Record<keyof typeof enUS, string> = {
   'history.sort.dateAsc': '날짜 (오래된순)',
   'history.sort.ratingDesc': '평점 (높은순)',
   'history.sort.ratingAsc': '평점 (낮은순)',
+
+  // Bean history
+  'beanHistory.title': '원두 히스토리',
+  'beanHistory.refresh': '새로고침',
+  'beanHistory.refresh.loading': '불러오는 중…',
+  'beanHistory.empty': '아직 저장된 원두가 없습니다. 새 브루에서 원두를 저장해보세요.',
+  'beanHistory.list.title': '내 원두 목록',
+  'beanHistory.selectPrompt': '목록에서 원두를 선택하세요.',
+  'beanHistory.detail.title': '원두 상세',
+  'beanHistory.edit.title': '원두 수정',
+  'beanHistory.edit.start': '원두 수정',
+  'beanHistory.edit.cancel': '취소',
+  'beanHistory.edit.save': '변경사항 저장',
+  'beanHistory.edit.save.saving': '저장 중…',
 
   // Flavor wheel picker
   'flavorPicker.addNote': '노트 추가',
