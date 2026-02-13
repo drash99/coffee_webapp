@@ -209,4 +209,7 @@ A workflow (`.github/workflows/deploy-to-pages.yml`) builds on push to `main` an
    ```
 2. In **drash99.github.io** repo: Settings > Deploy keys > Add deploy key. Paste contents of `deploy_key.pub`. Allow write access.
 3. In your **source repo** (where this workflow runs): Settings > Secrets and variables > Actions > New repository secret. Name: `ACTIONS_DEPLOY_KEY`, value: contents of `deploy_key` (private key).
-4. Push to `main` (or run the "Deploy to GitHub Pages" workflow manually). The workflow builds with base `/` and pushes `dist/` to `drash99.github.io` `main` branch.
+4. Add these repository secrets as well (used at build time):
+   - `VITE_SUPABASE_URL`
+   - `VITE_SUPABASE_ANON_KEY`
+5. Push to `main` (or run the "Deploy to GitHub Pages" workflow manually). The workflow builds with base `/` and pushes `dist/` to `drash99.github.io` `main` branch.
