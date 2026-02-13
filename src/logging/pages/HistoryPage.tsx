@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { AppUser } from '../../auth/types';
 import { getSupabaseClient } from '../../config/supabase';
 import type { BeanRow, BrewRow, FlavorNote, GrinderRow } from '../types';
@@ -178,6 +178,12 @@ export function HistoryPage({ user }: Props) {
   const [editSaving, setEditSaving] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState<BrewEditDraft | null>(null);
+  const [shareBusy, setShareBusy] = useState(false);
+  const [shareMsg, setShareMsg] = useState<string | null>(null);
+  const [shareUrl, setShareUrl] = useState<string | null>(null);
+  const [savePngBusy, setSavePngBusy] = useState(false);
+  const [savePngMsg, setSavePngMsg] = useState<string | null>(null);
+  const captureRef = useRef<HTMLDivElement | null>(null);
   const { makers, modelsForMaker } = useGrinderSuggestions(user.uid);
 
   const selected = useMemo(() => rows.find((r) => r.uid === selectedUid) ?? null, [rows, selectedUid]);
@@ -421,6 +427,138 @@ export function HistoryPage({ user }: Props) {
     }
   }
 
+  async function shareSelectedBrew() {
+    if (!selected) return;
+    setShareMsg(null);
+    setShareBusy(true);
+    try {
+      const supabase = getSupabaseClient();
+      const { data: existing, error: existingErr } = await supabase
+        .from('brew_shares')
+        .select('share_token,revoked_at')
+        .eq('brew_uid', selected.uid)
+        .maybeSingle();
+      if (existingErr) throw new Error(existingErr.message);
+
+      const current = existing as { share_token: string | null; revoked_at: string | null } | null;
+      let token = current?.share_token?.trim() ?? '';
+      if (!token || current?.revoked_at) {
+        token = crypto.randomUUID().replace(/-/g, '');
+        const { error: upsertErr } = await supabase
+          .from('brew_shares')
+          .upsert(
+            {
+              brew_uid: selected.uid,
+              share_token: token,
+              revoked_at: null
+            },
+            { onConflict: 'brew_uid' }
+          );
+        if (upsertErr) throw new Error(upsertErr.message);
+      }
+
+      const url = `${window.location.origin}/?share=${encodeURIComponent(token)}`;
+      setShareUrl(url);
+
+      try {
+        await navigator.clipboard.writeText(url);
+        setShareMsg(t('history.share.copied'));
+      } catch {
+        setShareMsg(t('history.share.created'));
+      }
+    } catch (e) {
+      setShareMsg(e instanceof Error ? e.message : t('history.share.failed'));
+    } finally {
+      setShareBusy(false);
+    }
+  }
+
+  async function saveSelectedAsPng() {
+    if (!selected || !captureRef.current) return;
+    setSavePngBusy(true);
+    setSavePngMsg(null);
+    try {
+      const source = captureRef.current;
+      const rect = source.getBoundingClientRect();
+      const width = Math.max(1, Math.round(rect.width));
+      const height = Math.max(1, Math.round(rect.height));
+
+      const clonedRoot = source.cloneNode(true) as HTMLElement;
+      function copyStyles(a: Element, b: Element) {
+        const aHtml = a as HTMLElement;
+        const bHtml = b as HTMLElement;
+        const cs = window.getComputedStyle(aHtml);
+        for (let i = 0; i < cs.length; i += 1) {
+          const prop = cs.item(i);
+          bHtml.style.setProperty(prop, cs.getPropertyValue(prop), cs.getPropertyPriority(prop));
+        }
+        const aChildren = Array.from(a.children);
+        const bChildren = Array.from(b.children);
+        for (let i = 0; i < aChildren.length; i += 1) {
+          const ac = aChildren[i];
+          const bc = bChildren[i];
+          if (ac && bc) copyStyles(ac, bc);
+        }
+      }
+      copyStyles(source, clonedRoot);
+
+      const wrapper = document.createElement('div');
+      wrapper.setAttribute('xmlns', 'http://www.w3.org/1999/xhtml');
+      wrapper.style.width = `${width}px`;
+      wrapper.style.height = `${height}px`;
+      wrapper.style.background = '#ffffff';
+      wrapper.appendChild(clonedRoot);
+
+      const serialized = new XMLSerializer().serializeToString(wrapper);
+      const svg = `
+        <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
+          <foreignObject width="100%" height="100%">${serialized}</foreignObject>
+        </svg>
+      `;
+      const blob = new Blob([svg], { type: 'image/svg+xml;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      try {
+        const img = new Image();
+        img.decoding = 'sync';
+        await new Promise<void>((resolve, reject) => {
+          img.onload = () => resolve();
+          img.onerror = () => reject(new Error('Failed to render image'));
+          img.src = url;
+        });
+
+        const scale = 2;
+        const canvas = document.createElement('canvas');
+        canvas.width = width * scale;
+        canvas.height = height * scale;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) throw new Error('Canvas is not supported');
+        ctx.scale(scale, scale);
+        ctx.drawImage(img, 0, 0);
+
+        const pngBlob = await new Promise<Blob | null>((resolve) => canvas.toBlob((b) => resolve(b), 'image/png'));
+        if (!pngBlob) throw new Error('PNG encode failed');
+        const pngUrl = URL.createObjectURL(pngBlob);
+        try {
+          const a = document.createElement('a');
+          a.href = pngUrl;
+          a.download = `brew-${new Date(selected.brew_date).toISOString().slice(0, 10)}.png`;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          setSavePngMsg(t('history.savePng.saved'));
+        } finally {
+          URL.revokeObjectURL(pngUrl);
+        }
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+    } catch (e) {
+      setSavePngMsg(e instanceof Error ? `${t('history.savePng.failed')}: ${e.message}` : t('history.savePng.failed'));
+    } finally {
+      setSavePngBusy(false);
+    }
+  }
+
   useEffect(() => {
     void Promise.all([refresh(), refreshSavedBeans()]).catch((e) => {
       setError(e instanceof Error ? e.message : t('common.loadFailed'));
@@ -432,6 +570,9 @@ export function HistoryPage({ user }: Props) {
     setIsEditing(false);
     setEditDraft(null);
     setEditError(null);
+    setShareMsg(null);
+    setShareUrl(null);
+    setSavePngMsg(null);
   }, [selectedUid]);
 
   return (
@@ -620,17 +761,35 @@ export function HistoryPage({ user }: Props) {
             <div className="p-4 space-y-3 text-sm">
               <div className="flex items-center justify-end gap-2">
                 {!isEditing ? (
-                  <button
-                    type="button"
-                    className="px-3 py-2 rounded-lg border bg-white text-sm hover:bg-gray-50"
-                    onClick={() => {
-                      setEditDraft(draftFromBrew(selected));
-                      setIsEditing(true);
-                      setEditError(null);
-                    }}
-                  >
-                    {t('history.edit.start')}
-                  </button>
+                  <>
+                    <button
+                      type="button"
+                      className="px-3 py-2 rounded-lg border bg-white text-sm hover:bg-gray-50 disabled:bg-gray-100"
+                      onClick={shareSelectedBrew}
+                      disabled={shareBusy}
+                    >
+                      {shareBusy ? t('history.share.creating') : t('history.share.button')}
+                    </button>
+                    <button
+                      type="button"
+                      className="px-3 py-2 rounded-lg border bg-white text-sm hover:bg-gray-50 disabled:bg-gray-100"
+                      onClick={saveSelectedAsPng}
+                      disabled={savePngBusy}
+                    >
+                      {savePngBusy ? t('history.savePng.saving') : t('history.savePng.button')}
+                    </button>
+                    <button
+                      type="button"
+                      className="px-3 py-2 rounded-lg border bg-white text-sm hover:bg-gray-50"
+                      onClick={() => {
+                        setEditDraft(draftFromBrew(selected));
+                        setIsEditing(true);
+                        setEditError(null);
+                      }}
+                    >
+                      {t('history.edit.start')}
+                    </button>
+                  </>
                 ) : (
                   <>
                     <button
@@ -656,6 +815,17 @@ export function HistoryPage({ user }: Props) {
                   </>
                 )}
               </div>
+              {shareMsg && !isEditing && (
+                <div className="text-xs text-gray-600 bg-gray-50 border border-gray-200 rounded-lg p-2">{shareMsg}</div>
+              )}
+              {savePngMsg && !isEditing && (
+                <div className="text-xs text-gray-600 bg-gray-50 border border-gray-200 rounded-lg p-2">{savePngMsg}</div>
+              )}
+              {shareUrl && !isEditing && (
+                <div className="text-xs text-gray-700 bg-gray-50 border border-gray-200 rounded-lg p-2 break-all">
+                  {t('history.share.linkLabel')}: {shareUrl}
+                </div>
+              )}
 
               {isEditing && editDraft ? (
                 <div className="space-y-3">
@@ -817,7 +987,7 @@ export function HistoryPage({ user }: Props) {
                   {editError && <div className="text-sm text-red-700 bg-red-50 border border-red-100 rounded-lg p-2">{editError}</div>}
                 </div>
               ) : (
-                <>
+                <div ref={captureRef} className="space-y-3">
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <div className="text-xs text-gray-500">{t('history.detail.date')}</div>
@@ -900,7 +1070,7 @@ export function HistoryPage({ user }: Props) {
                       <div className="whitespace-pre-wrap text-gray-900">{selected.taste_note || t('common.none')}</div>
                     </div>
                   </div>
-                </>
+                </div>
               )}
             </div>
           )}

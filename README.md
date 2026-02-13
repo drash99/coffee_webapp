@@ -93,6 +93,7 @@ The app has a separate **Logging** tab (next to **Analysis**) to record brews an
    - Recommended for this app's `id`-based UX: disable "Confirm email" so signup can log in immediately.
 3. Create tables + policies by running `supabase/schema.sql` in the Supabase SQL editor.
    - For existing projects that used the old `app_users` model, run `supabase/patch_2026-02-12_auth_rls.sql`.
+   - For brew sharing links/public read URLs, run `supabase/patch_2026-02-13_brew_share_links.sql`.
 4. Create a `.env.local` in the project root (gitignored) and set:
 
    - `VITE_SUPABASE_URL`
