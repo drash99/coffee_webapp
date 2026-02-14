@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { getSupabaseClient, isSupabaseConfigured } from '../../config/supabase';
 import type { FlavorNote } from '../types';
 import { useI18n } from '../../i18n/I18nProvider';
+import { downloadBrewAsPng } from '../utils/brewPng';
 
 type Props = {
   token: string;
@@ -63,89 +64,55 @@ export function SharedBrewPage({ token }: Props) {
   const [row, setRow] = useState<SharedBrewRow | null>(null);
   const [saveBusy, setSaveBusy] = useState(false);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
-  const captureRef = useRef<HTMLDivElement | null>(null);
 
   async function saveAsPng() {
-    if (!captureRef.current) return;
+    if (!row) return;
     setSaveBusy(true);
     setSaveMsg(null);
     try {
-      const source = captureRef.current;
-      const rect = source.getBoundingClientRect();
-      const width = Math.max(1, Math.round(rect.width));
-      const height = Math.max(1, Math.round(rect.height));
-
-      const clonedRoot = source.cloneNode(true) as HTMLElement;
-
-      function copyStyles(a: Element, b: Element) {
-        const aHtml = a as HTMLElement;
-        const bHtml = b as HTMLElement;
-        const cs = window.getComputedStyle(aHtml);
-        for (let i = 0; i < cs.length; i += 1) {
-          const prop = cs.item(i);
-          bHtml.style.setProperty(prop, cs.getPropertyValue(prop), cs.getPropertyPriority(prop));
-        }
-        const aChildren = Array.from(a.children);
-        const bChildren = Array.from(b.children);
-        for (let i = 0; i < aChildren.length; i += 1) {
-          const ac = aChildren[i];
-          const bc = bChildren[i];
-          if (ac && bc) copyStyles(ac, bc);
-        }
-      }
-
-      copyStyles(source, clonedRoot);
-
-      const wrapper = document.createElement('div');
-      wrapper.setAttribute('xmlns', 'http://www.w3.org/1999/xhtml');
-      wrapper.style.width = `${width}px`;
-      wrapper.style.height = `${height}px`;
-      wrapper.style.background = '#ffffff';
-      wrapper.appendChild(clonedRoot);
-
-      const serialized = new XMLSerializer().serializeToString(wrapper);
-      const svg = `
-        <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
-          <foreignObject width="100%" height="100%">${serialized}</foreignObject>
-        </svg>
-      `;
-      const blob = new Blob([svg], { type: 'image/svg+xml;charset=utf-8' });
-      const url = URL.createObjectURL(blob);
-      try {
-        const img = new Image();
-        img.decoding = 'sync';
-        await new Promise<void>((resolve, reject) => {
-          img.onload = () => resolve();
-          img.onerror = () => reject(new Error('Failed to render image'));
-          img.src = url;
-        });
-
-        const scale = 2;
-        const canvas = document.createElement('canvas');
-        canvas.width = width * scale;
-        canvas.height = height * scale;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) throw new Error('Canvas is not supported');
-        ctx.scale(scale, scale);
-        ctx.drawImage(img, 0, 0);
-
-        const pngBlob = await new Promise<Blob | null>((resolve) => canvas.toBlob((b) => resolve(b), 'image/png'));
-        if (!pngBlob) throw new Error('PNG encode failed');
-        const pngUrl = URL.createObjectURL(pngBlob);
-        try {
-          const a = document.createElement('a');
-          a.href = pngUrl;
-          a.download = `shared-brew-${row ? new Date(row.brew_date).toISOString().slice(0, 10) : 'export'}.png`;
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
-          setSaveMsg(t('sharedBrew.savePng.saved'));
-        } finally {
-          URL.revokeObjectURL(pngUrl);
-        }
-      } finally {
-        URL.revokeObjectURL(url);
-      }
+      await downloadBrewAsPng(
+        {
+          title: t('sharedBrew.title'),
+          sharedAtLabel: t('sharedBrew.sharedAt', { date: fmtDate(row.shared_at) }),
+          sections: [
+            {
+              rows: [
+                { label: t('history.detail.date'), value: fmtDate(row.brew_date) },
+                { label: t('history.detail.bean'), value: row.bean_name || t('common.none') },
+                { label: t('bean.field.roastery'), value: row.roastery || t('common.none') },
+                { label: t('bean.field.producer'), value: row.producer || t('common.none') },
+                { label: t('bean.field.originLocation'), value: row.origin_location || t('common.none') },
+                { label: t('bean.field.originCountry'), value: row.origin_country || t('common.none') },
+                { label: t('bean.field.process'), value: row.process || t('common.none') },
+                { label: t('bean.field.varietal'), value: row.varietal || t('common.none') },
+                { label: t('bean.field.roastedOn'), value: row.roasted_on ? fmtDate(row.roasted_on) : t('common.none') },
+                {
+                  label: t('history.detail.grinder'),
+                  value: `${row.grinder_maker || t('common.none')}${row.grinder_model ? ` ${row.grinder_model}` : ''}${row.grinder_setting ? ` — ${row.grinder_setting}` : ''}`
+                },
+                { label: t('history.detail.rating'), value: row.rating == null ? t('common.none') : Number(row.rating).toFixed(1) },
+                {
+                  label: t('history.detail.doseYield'),
+                  value: `${row.coffee_dose_g ?? t('common.none')}g / ${row.coffee_yield_g ?? t('common.none')}g`
+                },
+                { label: t('history.detail.tds'), value: String(row.coffee_tds ?? t('common.na')) },
+                { label: t('history.detail.water'), value: row.water ?? t('common.none') },
+                { label: t('history.detail.waterTemp'), value: row.water_temp_c == null ? t('common.na') : `${row.water_temp_c}°C` },
+                { label: t('history.detail.grindMedianUm'), value: row.grind_median_um == null ? t('common.na') : `${row.grind_median_um} μm` },
+                { label: t('history.detail.recipe'), value: row.recipe || t('common.none') },
+                { label: t('history.detail.extractionNote'), value: row.extraction_note || t('common.none') },
+                { label: t('history.detail.tasteNote'), value: row.taste_note || t('common.none') }
+              ]
+            }
+          ],
+          notes: [
+            { label: t('history.detail.cupNotesSca'), value: row.cup_flavor_notes ?? [], empty: t('common.none') },
+            { label: t('history.detail.tasteNotesSca'), value: row.taste_flavor_notes, empty: t('common.none') }
+          ]
+        },
+        `shared-brew-${new Date(row.brew_date).toISOString().slice(0, 10)}.png`
+      );
+      setSaveMsg(t('sharedBrew.savePng.saved'));
     } catch (e) {
       setSaveMsg(e instanceof Error ? `${t('sharedBrew.savePng.failed')}: ${e.message}` : t('sharedBrew.savePng.failed'));
     } finally {
@@ -183,7 +150,7 @@ export function SharedBrewPage({ token }: Props) {
 
   return (
     <div className="max-w-4xl mx-auto space-y-4">
-      <div className="bg-white rounded-xl shadow-sm border border-gray-100" ref={captureRef}>
+      <div className="bg-white rounded-xl shadow-sm border border-gray-100">
         <div className="px-4 py-3 border-b bg-gray-50 text-sm font-medium text-gray-700 flex items-center justify-between gap-3">
           <span>{t('sharedBrew.title')}</span>
           {row && (

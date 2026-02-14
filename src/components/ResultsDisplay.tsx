@@ -302,39 +302,6 @@ export function ResultsDisplay({ mode, data, stageImageData, warpedImageData, lu
           <h2 className="text-lg font-semibold">{t('results.grind.title')}</h2>
         </div>
 
-        {warpedImageUrl && (
-          <div className="rounded-lg overflow-hidden border border-gray-200 bg-gray-50">
-            <p className="text-xs text-gray-500 px-2 py-1">{t('results.debug.warped')}</p>
-            <p className="text-xs text-gray-500 px-2 pb-1">{t('results.debug.warped.help')}</p>
-            <img src={warpedImageUrl} alt={t('results.alt.warped')} className="w-full h-auto max-h-80 object-contain" />
-          </div>
-        )}
-        {lutCurves && (
-          <div className="rounded-lg border border-gray-200 bg-gray-50 p-2">
-            <p className="text-xs text-gray-500 px-2 py-1">{t('results.debug.lut')}</p>
-            <div className="h-48">
-              <Line
-                data={{
-                  labels: Array.from({ length: 256 }, (_, i) => i),
-                  datasets: [
-                    { label: 'R', data: lutCurves.r, borderColor: 'rgb(220,53,69)', backgroundColor: 'rgba(220,53,69,0.1)', fill: false, pointRadius: 0 },
-                    { label: 'G', data: lutCurves.g, borderColor: 'rgb(40,167,69)', backgroundColor: 'rgba(40,167,69,0.1)', fill: false, pointRadius: 0 },
-                    { label: 'B', data: lutCurves.b, borderColor: 'rgb(0,123,255)', backgroundColor: 'rgba(0,123,255,0.1)', fill: false, pointRadius: 0 }
-                  ]
-                }}
-                options={{
-                  responsive: true,
-                  maintainAspectRatio: false,
-                  scales: {
-                    x: { title: { display: true, text: t('results.axis.input') }, min: 0, max: 255 },
-                    y: { title: { display: true, text: t('results.axis.output') }, min: 0, max: 255 }
-                  },
-                  plugins: { legend: { display: true } }
-                }}
-              />
-            </div>
-          </div>
-        )}
         {stageImageUrl && (
           <div className="rounded-lg overflow-hidden border border-gray-200 bg-gray-50">
             <p className="text-xs text-gray-500 px-2 py-1">{t('results.debug.stageParticles')}</p>
@@ -543,4 +510,3 @@ export function ResultsDisplay({ mode, data, stageImageData, warpedImageData, lu
     );
   }
 }
-

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { AppUser } from '../../auth/types';
 import { getSupabaseClient } from '../../config/supabase';
 import type { BeanRow, BrewRow, FlavorNote, GrinderRow } from '../types';
@@ -7,6 +7,7 @@ import { AutocompleteInput } from '../components/AutocompleteInput';
 import { FlavorWheelPicker } from '../components/FlavorWheelPicker';
 import { StarRating } from '../components/StarRating';
 import { useGrinderSuggestions } from '../hooks/useGrinderSuggestions';
+import { downloadBrewAsPng } from '../utils/brewPng';
 
 type Props = {
   user: AppUser;
@@ -183,7 +184,6 @@ export function HistoryPage({ user }: Props) {
   const [shareUrl, setShareUrl] = useState<string | null>(null);
   const [savePngBusy, setSavePngBusy] = useState(false);
   const [savePngMsg, setSavePngMsg] = useState<string | null>(null);
-  const captureRef = useRef<HTMLDivElement | null>(null);
   const { makers, modelsForMaker } = useGrinderSuggestions(user.uid);
 
   const selected = useMemo(() => rows.find((r) => r.uid === selectedUid) ?? null, [rows, selectedUid]);
@@ -474,84 +474,61 @@ export function HistoryPage({ user }: Props) {
   }
 
   async function saveSelectedAsPng() {
-    if (!selected || !captureRef.current) return;
+    if (!selected) return;
     setSavePngBusy(true);
     setSavePngMsg(null);
     try {
-      const source = captureRef.current;
-      const rect = source.getBoundingClientRect();
-      const width = Math.max(1, Math.round(rect.width));
-      const height = Math.max(1, Math.round(rect.height));
-
-      const clonedRoot = source.cloneNode(true) as HTMLElement;
-      function copyStyles(a: Element, b: Element) {
-        const aHtml = a as HTMLElement;
-        const bHtml = b as HTMLElement;
-        const cs = window.getComputedStyle(aHtml);
-        for (let i = 0; i < cs.length; i += 1) {
-          const prop = cs.item(i);
-          bHtml.style.setProperty(prop, cs.getPropertyValue(prop), cs.getPropertyPriority(prop));
-        }
-        const aChildren = Array.from(a.children);
-        const bChildren = Array.from(b.children);
-        for (let i = 0; i < aChildren.length; i += 1) {
-          const ac = aChildren[i];
-          const bc = bChildren[i];
-          if (ac && bc) copyStyles(ac, bc);
-        }
-      }
-      copyStyles(source, clonedRoot);
-
-      const wrapper = document.createElement('div');
-      wrapper.setAttribute('xmlns', 'http://www.w3.org/1999/xhtml');
-      wrapper.style.width = `${width}px`;
-      wrapper.style.height = `${height}px`;
-      wrapper.style.background = '#ffffff';
-      wrapper.appendChild(clonedRoot);
-
-      const serialized = new XMLSerializer().serializeToString(wrapper);
-      const svg = `
-        <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
-          <foreignObject width="100%" height="100%">${serialized}</foreignObject>
-        </svg>
-      `;
-      const blob = new Blob([svg], { type: 'image/svg+xml;charset=utf-8' });
-      const url = URL.createObjectURL(blob);
-      try {
-        const img = new Image();
-        img.decoding = 'sync';
-        await new Promise<void>((resolve, reject) => {
-          img.onload = () => resolve();
-          img.onerror = () => reject(new Error('Failed to render image'));
-          img.src = url;
-        });
-
-        const scale = 2;
-        const canvas = document.createElement('canvas');
-        canvas.width = width * scale;
-        canvas.height = height * scale;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) throw new Error('Canvas is not supported');
-        ctx.scale(scale, scale);
-        ctx.drawImage(img, 0, 0);
-
-        const pngBlob = await new Promise<Blob | null>((resolve) => canvas.toBlob((b) => resolve(b), 'image/png'));
-        if (!pngBlob) throw new Error('PNG encode failed');
-        const pngUrl = URL.createObjectURL(pngBlob);
-        try {
-          const a = document.createElement('a');
-          a.href = pngUrl;
-          a.download = `brew-${new Date(selected.brew_date).toISOString().slice(0, 10)}.png`;
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
-          setSavePngMsg(t('history.savePng.saved'));
-        } finally {
-          URL.revokeObjectURL(pngUrl);
-        }
-      } finally {
-        URL.revokeObjectURL(url);
-      }
+      await downloadBrewAsPng(
+        {
+          title: t('history.detail.title'),
+          sections: [
+            {
+              rows: [
+                { label: t('history.detail.date'), value: fmtDate(selected.brew_date) },
+                { label: t('history.detail.bean'), value: selected.beans?.bean_name || t('common.none') },
+                { label: t('bean.field.roastery'), value: selected.beans?.roastery || t('common.none') },
+                { label: t('bean.field.producer'), value: selected.beans?.producer || t('common.none') },
+                { label: t('bean.field.originLocation'), value: selected.beans?.origin_location || t('common.none') },
+                { label: t('bean.field.originCountry'), value: selected.beans?.origin_country || t('common.none') },
+                { label: t('bean.field.process'), value: selected.beans?.process || t('common.none') },
+                { label: t('bean.field.varietal'), value: selected.beans?.varietal || t('common.none') },
+                {
+                  label: t('bean.field.roastedOn'),
+                  value: selected.beans?.roasted_on ? fmtDate(selected.beans.roasted_on) : t('common.none')
+                },
+                {
+                  label: t('history.detail.grinder'),
+                  value: `${selected.grinders?.maker || t('common.none')}${selected.grinders?.model ? ` ${selected.grinders.model}` : ''}${selected.grinder_setting ? ` — ${selected.grinder_setting}` : ''}`
+                },
+                { label: t('history.detail.rating'), value: selected.rating == null ? t('common.none') : selected.rating.toFixed(1) },
+                {
+                  label: t('history.detail.doseYield'),
+                  value: `${selected.coffee_dose_g ?? t('common.none')}g / ${selected.coffee_yield_g ?? t('common.none')}g`
+                },
+                { label: t('history.detail.tds'), value: String(selected.coffee_tds ?? t('common.na')) },
+                { label: t('history.detail.water'), value: selected.water ?? t('common.none') },
+                {
+                  label: t('history.detail.waterTemp'),
+                  value: selected.water_temp_c == null ? t('common.na') : `${selected.water_temp_c}°C`
+                },
+                {
+                  label: t('history.detail.grindMedianUm'),
+                  value: selected.grind_median_um == null ? t('common.na') : `${selected.grind_median_um} μm`
+                },
+                { label: t('history.detail.recipe'), value: selected.recipe || t('common.none') },
+                { label: t('history.detail.extractionNote'), value: selected.extraction_note || t('common.none') },
+                { label: t('history.detail.tasteNote'), value: selected.taste_note || t('common.none') }
+              ]
+            }
+          ],
+          notes: [
+            { label: t('history.detail.cupNotesSca'), value: selected.beans?.cup_flavor_notes ?? [], empty: t('common.none') },
+            { label: t('history.detail.tasteNotesSca'), value: selected.taste_flavor_notes, empty: t('common.none') }
+          ]
+        },
+        `brew-${new Date(selected.brew_date).toISOString().slice(0, 10)}.png`
+      );
+      setSavePngMsg(t('history.savePng.saved'));
     } catch (e) {
       setSavePngMsg(e instanceof Error ? `${t('history.savePng.failed')}: ${e.message}` : t('history.savePng.failed'));
     } finally {
@@ -987,7 +964,7 @@ export function HistoryPage({ user }: Props) {
                   {editError && <div className="text-sm text-red-700 bg-red-50 border border-red-100 rounded-lg p-2">{editError}</div>}
                 </div>
               ) : (
-                <div ref={captureRef} className="space-y-3">
+                <div className="space-y-3">
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <div className="text-xs text-gray-500">{t('history.detail.date')}</div>
@@ -995,12 +972,36 @@ export function HistoryPage({ user }: Props) {
                     </div>
                     <div>
                       <div className="text-xs text-gray-500">{t('history.detail.bean')}</div>
+                      <div className="font-medium text-gray-900">{selected.beans?.bean_name || t('common.none')}</div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-gray-500">{t('bean.field.roastery')}</div>
+                      <div className="font-medium text-gray-900">{selected.beans?.roastery || t('common.none')}</div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-gray-500">{t('bean.field.producer')}</div>
+                      <div className="font-medium text-gray-900">{selected.beans?.producer || t('common.none')}</div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-gray-500">{t('bean.field.originLocation')}</div>
+                      <div className="font-medium text-gray-900">{selected.beans?.origin_location || t('common.none')}</div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-gray-500">{t('bean.field.originCountry')}</div>
+                      <div className="font-medium text-gray-900">{selected.beans?.origin_country || t('common.none')}</div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-gray-500">{t('bean.field.process')}</div>
+                      <div className="font-medium text-gray-900">{selected.beans?.process || t('common.none')}</div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-gray-500">{t('bean.field.varietal')}</div>
+                      <div className="font-medium text-gray-900">{selected.beans?.varietal || t('common.none')}</div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-gray-500">{t('bean.field.roastedOn')}</div>
                       <div className="font-medium text-gray-900">
-                        {selected.beans?.bean_name || t('common.none')}{' '}
-                        {selected.beans?.roastery ? `— ${selected.beans.roastery}` : ''}{' '}
-                        {selected.beans?.origin_location || selected.beans?.origin_country
-                          ? `(${[selected.beans?.origin_location, selected.beans?.origin_country].filter(Boolean).join(', ')})`
-                          : ''}
+                        {selected.beans?.roasted_on ? fmtDate(selected.beans.roasted_on) : t('common.none')}
                       </div>
                     </div>
                     <div>
