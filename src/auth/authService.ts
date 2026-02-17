@@ -1,4 +1,5 @@
 import { getSupabaseClient } from '../config/supabase';
+import { toSessionUser } from '../logging/session';
 import type { AppUser } from './types';
 
 export type AuthErrorCode =
@@ -41,13 +42,6 @@ function normalizeId(raw: string): string {
 
 function idToEmail(id: string): string {
   return `${id.toLowerCase()}@${EMAIL_DOMAIN}`;
-}
-
-function userToAppUser(user: { id: string; email?: string | null; user_metadata?: Record<string, any> }): AppUser {
-  const explicit = typeof user.user_metadata?.login_id === 'string' ? user.user_metadata.login_id.trim() : '';
-  const fromEmail = (user.email ?? '').split('@')[0] ?? '';
-  const loginId = explicit || fromEmail || user.id;
-  return { uid: user.id, id: loginId };
 }
 
 async function withTimeout<T>(promise: Promise<T>, ms = 15000): Promise<T> {
@@ -96,12 +90,12 @@ export async function signup(input: SignupInput): Promise<AppUser> {
       throw new AuthError('SUPABASE', loginErr.message);
     }
     if (!loginData.user) throw new AuthError('SUPABASE', 'Signup succeeded but no user returned.');
-    return userToAppUser(loginData.user);
+    return toSessionUser(loginData.user);
   }
 
   const user = signUpData.user ?? signUpData.session.user ?? null;
   if (!user) throw new AuthError('SUPABASE', 'Signup succeeded but no user returned.');
-  return userToAppUser(user);
+  return toSessionUser(user);
 }
 
 export async function login(input: LoginInput): Promise<AppUser> {
@@ -125,7 +119,7 @@ export async function login(input: LoginInput): Promise<AppUser> {
   }
 
   if (!data.user) throw new AuthError('SUPABASE', 'Login succeeded but no user returned.');
-  return userToAppUser(data.user);
+  return toSessionUser(data.user);
 }
 
 export async function logout(): Promise<void> {

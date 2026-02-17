@@ -6,6 +6,8 @@ import { StarRating } from '../components/StarRating';
 import { AutocompleteInput } from '../components/AutocompleteInput';
 import { useGrinderSuggestions } from '../hooks/useGrinderSuggestions';
 import { useBeanSuggestions } from '../hooks/useBeanSuggestions';
+import { toNullableNumber, todayYMD, fToC } from '../utils/formatting';
+import { beanDisplayLabel } from '../utils/beanLabel';
 import type { BeanInput, BrewInput, FlavorNote, GrinderInput } from '../types';
 import { useI18n } from '../../i18n/I18nProvider';
 
@@ -27,24 +29,6 @@ type SavedBeanOption = {
   roasted_on: string | null;
 };
 
-function toNullableNumber(input: string): number | null {
-  const v = input.trim();
-  if (!v) return null;
-  const n = Number(v);
-  return Number.isFinite(n) ? n : null;
-}
-
-function todayYMD(): string {
-  const d = new Date();
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, '0');
-  const dd = String(d.getDate()).padStart(2, '0');
-  return `${yyyy}-${mm}-${dd}`;
-}
-
-function fToC(f: number): number {
-  return ((f - 32) * 5) / 9;
-}
 
 const emptyBean: BeanInput = {
   bean_name: '',
@@ -58,21 +42,6 @@ const emptyBean: BeanInput = {
   cup_flavor_notes: [],
   roasted_on: ''
 };
-
-function beanDisplayLabel(bean: SavedBeanOption, fallback: string): string {
-  const title =
-    bean.bean_name?.trim() ||
-    bean.roastery?.trim() ||
-    bean.origin_location?.trim() ||
-    bean.origin_country?.trim() ||
-    fallback;
-  const origin = [bean.origin_location, bean.origin_country].filter(Boolean).join(', ');
-  const roastery = bean.roastery?.trim();
-  if (roastery && origin) return `${title} — ${roastery} (${origin})`;
-  if (roastery) return `${title} — ${roastery}`;
-  if (origin) return `${title} (${origin})`;
-  return title;
-}
 
 export function NewBrewPage({ user }: Props) {
   const { t } = useI18n();

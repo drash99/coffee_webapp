@@ -5,6 +5,8 @@ import { useI18n } from '../../i18n/I18nProvider';
 import { AutocompleteInput } from '../components/AutocompleteInput';
 import { FlavorWheelPicker } from '../components/FlavorWheelPicker';
 import { useBeanSuggestions } from '../hooks/useBeanSuggestions';
+import { fmtDate } from '../utils/formatting';
+import { beanDisplayLabel } from '../utils/beanLabel';
 import type { BeanInput, BeanRow, FlavorNote } from '../types';
 
 type Props = {
@@ -26,28 +28,6 @@ type BeanListRow = Pick<
   | 'roasted_on'
   | 'created_at'
 >;
-
-function beanDisplayLabel(bean: BeanListRow, fallback: string): string {
-  const title =
-    bean.bean_name?.trim() ||
-    bean.roastery?.trim() ||
-    bean.origin_location?.trim() ||
-    bean.origin_country?.trim() ||
-    fallback;
-  const origin = [bean.origin_location, bean.origin_country].filter(Boolean).join(', ');
-  const roastery = bean.roastery?.trim();
-  if (roastery && origin) return `${title} — ${roastery} (${origin})`;
-  if (roastery) return `${title} — ${roastery}`;
-  if (origin) return `${title} (${origin})`;
-  return title;
-}
-
-function fmtDate(iso: string | null | undefined): string {
-  if (!iso) return '';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleDateString();
-}
 
 function draftFromBean(bean: BeanListRow): BeanInput {
   return {

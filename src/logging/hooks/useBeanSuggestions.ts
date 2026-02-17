@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { isSupabaseConfigured, getSupabaseClient } from '../../config/supabase';
+import { unique } from '../utils/formatting';
 
 interface BeanRecord {
   roastery: string;
@@ -60,19 +61,6 @@ export function useBeanSuggestions(userUid: string | undefined) {
 
     return () => { cancelled = true; };
   }, [userUid]);
-
-  /** Deduplicate a list of strings, keeping the first (most recent) casing. */
-  function unique(values: string[]): string[] {
-    const map = new Map<string, string>();
-    for (const v of values) {
-      if (!v) continue;
-      const key = v.toLowerCase();
-      if (!map.has(key)) map.set(key, v);
-    }
-    return Array.from(map.values()).sort((a, b) =>
-      a.localeCompare(b, undefined, { sensitivity: 'base' })
-    );
-  }
 
   // --- Independent fields ---
 

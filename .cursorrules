@@ -1,0 +1,161 @@
+# BeanLog — Cursor Rules & LLM Context
+
+## Project Overview
+
+BeanLog is a zero-cost, local-first Progressive Web App (PWA) for specialty coffee analytics.
+It has two main features:
+1. **Analysis** — Computer vision (OpenCV.js) to analyze bean size, roast level, and grind distribution via a printable calibration target.
+2. **Logging** — Brew journal backed by Supabase (auth + Postgres + RLS). Users log beans, grinders, and brews with SCA flavor wheel notes.
+
+## Tech Stack
+
+- **Frontend:** React 18, TypeScript, Vite 5, Tailwind CSS 3, Lucide Icons
+- **PWA:** `vite-plugin-pwa` for offline capability
+- **Backend:** Supabase (Auth, Postgres with Row Level Security)
+- **Charts:** `chart.js` + `react-chartjs-2`
+- **CV:** OpenCV.js loaded in a Web Worker (`src/workers/cv.worker.ts`)
+- **i18n:** Custom lightweight system (`src/i18n/`) — English (`en-us`) and Korean (`ko-kr`)
+
+## Directory Structure
+
+```
+src/
+├── App.tsx                    # Root: tab switcher (Analysis / Logging) + shared link handler
+├── main.tsx                   # React entry point, wraps App in I18nProvider
+├── index.css                  # Tailwind base + global styles
+├── vite-env.d.ts              # Vite env types
+│
+├── analysis/                  # CV-based bean/grind analysis (standalone tab)
+│   └── AnalysisApp.tsx
+│
+├── auth/                      # Authentication layer
+│   ├── authService.ts         # signup/login/logout via Supabase Auth
+│   ├── crypto.ts              # PBKDF2 hashing helpers (Web Crypto API)
+│   └── types.ts               # AppUser type
+│
+├── components/                # Shared components used by analysis
+│   ├── ImageUpload.tsx
+│   └── ResultsDisplay.tsx
+│
+├── config/                    # Supabase client singleton
+│   ├── supabase.ts
+│   ├── supabase.credentials.ts        # Reads VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY
+│   └── supabase.credentials.example.ts
+│
+├── i18n/                      # Internationalization
+│   ├── i18n.ts                # LOCALES map, format() helper, LanguageCode type
+│   ├── I18nProvider.tsx        # React context + useI18n() hook
+│   ├── prefs.ts               # Persist language preference in localStorage
+│   └── locales/
+│       ├── en-us.ts
+│       └── ko-kr.ts
+│
+├── logging/                   # Brew logging feature (Supabase-backed)
+│   ├── LoggingApp.tsx         # Auth gate + tab nav (New brew / History / Beans)
+│   ├── types.ts               # Domain types: BeanInput, BrewInput, GrinderInput, *Row types
+│   ├── session.ts             # localStorage session persistence + Supabase session restore
+│   ├── scaFlavorWheel.ts      # SCA flavor wheel taxonomy tree + helpers
+│   │
+│   ├── components/            # Reusable logging UI components
+│   │   ├── AutocompleteInput.tsx   # Text input with filterable dropdown suggestions
+│   │   ├── FlavorWheelPicker.tsx   # 3-level cascading SCA flavor note picker
+│   │   ├── NoteDotsList.tsx        # Renders FlavorNote[] as colored dot chips
+│   │   └── StarRating.tsx          # Half-star rating widget (0–5, step 0.5)
+│   │
+│   ├── hooks/                 # Data-fetching hooks for suggestion autocomplete
+│   │   ├── useBeanSuggestions.ts   # Hierarchical: roastery, country → location → producer
+│   │   └── useGrinderSuggestions.ts
+│   │
+│   ├── pages/                 # Full page-level components
+│   │   ├── NewBrewPage.tsx    # Create a new brew (bean + grinder + brew form)
+│   │   ├── HistoryPage.tsx    # Browse, filter, sort, edit, share brews
+│   │   ├── BeanHistoryPage.tsx # Browse + edit saved beans
+│   │   ├── SharedBrewPage.tsx # Public read-only view of a shared brew
+│   │   ├── LoginPage.tsx
+│   │   └── SignupPage.tsx
+│   │
+│   └── utils/                 # Pure helper functions
+│       ├── formatting.ts      # toNullableNumber, fmtDate, todayYMD, isoToYmd, fToC, unique
+│       ├── beanLabel.ts       # beanDisplayLabel — consistent label for bean selects/lists
+│       └── brewPng.ts         # Canvas-based PNG export of brew details
+│
+├── workers/
+│   └── cv.worker.ts           # Web Worker: ArUco detection, perspective warp, analysis
+│
+supabase/
+├── schema.sql                 # Full schema (tables, triggers, RLS policies, functions)
+├── seed_debug_data.sql
+├── clean_reset.sql
+└── patch_*.sql                # Incremental schema patches (dated)
+```
+
+## Coding Conventions
+
+### TypeScript
+- Strict mode (`strict: true` in tsconfig). No `any` unless interfacing with OpenCV.
+- Prefer `type` over `interface` for object shapes (project convention).
+- Use `type Props = { ... }` for React component props.
+- Named exports everywhere (no default exports except `App.tsx`).
+
+### React Patterns
+- **Functional components only.** No class components.
+- **State management:** Local `useState` + prop drilling. No global store (Redux/Zustand).
+- **Data fetching:** Inline `async` functions inside `useEffect` or event handlers. No React Query.
+- **Supabase calls:** Always go through `getSupabaseClient()` from `src/config/supabase.ts`.
+- **i18n:** Always use `const { t } = useI18n()` for user-visible strings. Never hardcode English text in JSX.
+- **Form state:** String-based state (`BrewInput` uses strings) parsed to numbers on save via `toNullableNumber()`.
+
+### Styling
+- **Tailwind CSS** for all styling. No CSS modules, no styled-components.
+- Amber (`amber-700`) as the primary accent color.
+- White card containers: `bg-white p-6 rounded-xl shadow-sm border border-gray-100`.
+- Input styling: `w-full p-2 border rounded-lg`.
+- Button: primary = `bg-amber-700 text-white`, secondary = `border bg-white hover:bg-gray-50`.
+
+### Database / Supabase
+- All tables use `uuid` primary keys generated client-side (`crypto.randomUUID()`).
+- `user_uid` is auto-filled via `BEFORE INSERT` trigger from `auth.uid()`.
+- Row Level Security (RLS) scopes all queries to the authenticated user.
+- Temperatures are stored in Celsius (`water_temp_c`). The UI supports F→C conversion on input.
+- The `brews` table has a join to `beans` (required) and `grinders` (optional).
+- Flavor notes are stored both as JSONB on the parent row AND in normalized tables (`bean_flavor_notes`, `brew_flavor_notes`) for filtering.
+
+### Shared Utilities (in `src/logging/utils/`)
+- `toNullableNumber(s)` — parse string to `number | null`, returns null for empty/NaN.
+- `fmtDate(iso)` — format ISO date string for display via `toLocaleDateString()`.
+- `todayYMD()` / `isoToYmd(iso)` — `YYYY-MM-DD` formatting.
+- `fToC(f)` — Fahrenheit → Celsius conversion.
+- `unique(values)` — case-insensitive deduplication, sorted alphabetically.
+- `beanDisplayLabel(bean, fallback)` — consistent bean label across all pages.
+
+### File Naming
+- React components: `PascalCase.tsx`
+- Hooks: `camelCase.ts` prefixed with `use`
+- Utilities: `camelCase.ts`
+- Types file: `types.ts` (one per feature module)
+- Locale files: `en-us.ts`, `ko-kr.ts`
+
+### Adding a New i18n Key
+1. Add the key + English text to `src/i18n/locales/en-us.ts`.
+2. Add the key + Korean text to `src/i18n/locales/ko-kr.ts`.
+3. Use `t('your.key')` or `t('your.key', { param: value })` in the component.
+4. The `I18nKey` type is automatically derived from `en-us.ts` — TypeScript will flag missing keys.
+
+### Adding a New Database Column
+1. Create a dated patch file in `supabase/` (e.g. `patch_YYYY-MM-DD_description.sql`).
+2. Update `supabase/schema.sql` with the full schema.
+3. Update the corresponding TypeScript types in `src/logging/types.ts` (both `*Input` and `*Row`).
+4. Update the Supabase `select()` queries and insert/update payloads in the relevant page components.
+5. Add i18n keys for any new UI labels.
+
+## Important Notes for AI Assistants
+
+- **Do NOT modify `src/workers/cv.worker.ts`** unless explicitly asked — it's a complex OpenCV pipeline.
+- **Do NOT modify `supabase/schema.sql`** without creating a corresponding patch file.
+- **Always preserve i18n** — never hardcode English text in components. Add keys to both locale files.
+- **The `brews` table requires `bean_uid`** — every brew must reference a bean.
+- **RLS is enforced** — Supabase queries do not need explicit `user_uid` filters; RLS handles it.
+- **UUID generation** is client-side via `crypto.randomUUID()`.
+- When adding features to the logging module, follow the pattern in `NewBrewPage.tsx`.
+- Import shared utils from `src/logging/utils/` — do not duplicate utility functions.
+

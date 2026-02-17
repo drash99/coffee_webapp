@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
 import { getSupabaseClient, isSupabaseConfigured } from '../../config/supabase';
+import { NoteDotsList } from '../components/NoteDotsList';
 import type { FlavorNote } from '../types';
 import { useI18n } from '../../i18n/I18nProvider';
+import { fmtDate } from '../utils/formatting';
 import { downloadBrewAsPng } from '../utils/brewPng';
 
 type Props = {
@@ -36,26 +38,6 @@ type SharedBrewRow = {
   taste_flavor_notes: FlavorNote[] | null;
   shared_at: string;
 };
-
-function fmtDate(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleDateString();
-}
-
-function NoteDotsList({ notes, emptyLabel }: { notes: FlavorNote[] | null | undefined; emptyLabel: string }) {
-  if (!notes || notes.length === 0) return <div className="text-gray-900">{emptyLabel}</div>;
-  return (
-    <div className="flex flex-wrap gap-2">
-      {notes.map((n) => (
-        <div key={n.path.join('>')} className="flex items-center gap-2 px-3 py-1 rounded-full border bg-white text-sm">
-          <span className="inline-block w-2 h-2 rounded-full" style={{ backgroundColor: n.color }} />
-          <span className="text-gray-900">{n.path.join(' / ')}</span>
-        </div>
-      ))}
-    </div>
-  );
-}
 
 export function SharedBrewPage({ token }: Props) {
   const { t } = useI18n();

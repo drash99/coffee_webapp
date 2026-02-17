@@ -5,8 +5,11 @@ import type { BeanRow, BrewRow, FlavorNote, GrinderRow } from '../types';
 import { useI18n } from '../../i18n/I18nProvider';
 import { AutocompleteInput } from '../components/AutocompleteInput';
 import { FlavorWheelPicker } from '../components/FlavorWheelPicker';
+import { NoteDotsList } from '../components/NoteDotsList';
 import { StarRating } from '../components/StarRating';
 import { useGrinderSuggestions } from '../hooks/useGrinderSuggestions';
+import { toNullableNumber, fmtDate, isoToYmd, unique } from '../utils/formatting';
+import { beanDisplayLabel } from '../utils/beanLabel';
 import { downloadBrewAsPng } from '../utils/brewPng';
 
 type Props = {
@@ -44,25 +47,6 @@ type BrewWithBean = BrewRow & {
   grinders: Pick<GrinderRow, 'uid' | 'maker' | 'model'> | null;
 };
 
-function fmtDate(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleDateString();
-}
-
-function NoteDotsList({ notes, emptyLabel }: { notes: FlavorNote[] | null | undefined; emptyLabel: string }) {
-  if (!notes || notes.length === 0) return <div className="text-gray-900">{emptyLabel}</div>;
-  return (
-    <div className="flex flex-wrap gap-2">
-      {notes.map((n) => (
-        <div key={n.path.join('>')} className="flex items-center gap-2 px-3 py-1 rounded-full border bg-white text-sm">
-          <span className="inline-block w-2 h-2 rounded-full" style={{ backgroundColor: n.color }} />
-          <span className="text-gray-900">{n.path.join(' / ')}</span>
-        </div>
-      ))}
-    </div>
-  );
-}
 
 interface Filters {
   roastery: string;
@@ -109,43 +93,6 @@ type BrewEditDraft = {
   taste_flavor_notes: FlavorNote[];
 };
 
-function toNullableNumber(input: string): number | null {
-  const v = input.trim();
-  if (!v) return null;
-  const n = Number(v);
-  return Number.isFinite(n) ? n : null;
-}
-
-function isoToYmd(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '';
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, '0');
-  const dd = String(d.getDate()).padStart(2, '0');
-  return `${yyyy}-${mm}-${dd}`;
-}
-
-function beanDisplayLabel(bean: SavedBeanOption, fallback: string): string {
-  const title = bean.bean_name || bean.roastery || bean.origin_location || bean.origin_country || fallback;
-  const origin = [bean.origin_location, bean.origin_country].filter(Boolean).join(', ');
-  if (bean.roastery && origin) return `${title} — ${bean.roastery} (${origin})`;
-  if (bean.roastery) return `${title} — ${bean.roastery}`;
-  if (origin) return `${title} (${origin})`;
-  return title;
-}
-
-/** Deduplicate strings (case-insensitive), keep first casing, sort alphabetically. */
-function unique(values: string[]): string[] {
-  const map = new Map<string, string>();
-  for (const v of values) {
-    if (!v) continue;
-    const key = v.toLowerCase();
-    if (!map.has(key)) map.set(key, v);
-  }
-  return Array.from(map.values()).sort((a, b) =>
-    a.localeCompare(b, undefined, { sensitivity: 'base' })
-  );
-}
 
 function matchesFilter(value: string | null | undefined, filter: string): boolean {
   if (!filter.trim()) return true;
