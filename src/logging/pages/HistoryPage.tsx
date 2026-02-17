@@ -131,6 +131,7 @@ export function HistoryPage({ user }: Props) {
   const [shareUrl, setShareUrl] = useState<string | null>(null);
   const [savePngBusy, setSavePngBusy] = useState(false);
   const [savePngMsg, setSavePngMsg] = useState<string | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
   const { makers, modelsForMaker } = useGrinderSuggestions(user.uid);
 
   const selected = useMemo(() => rows.find((r) => r.uid === selectedUid) ?? null, [rows, selectedUid]);
@@ -483,6 +484,23 @@ export function HistoryPage({ user }: Props) {
     }
   }
 
+  async function deleteSelectedBrew() {
+    if (!selected) return;
+    if (!window.confirm(t('history.delete.confirm'))) return;
+    setDeleteBusy(true);
+    try {
+      const supabase = getSupabaseClient();
+      const { error: delErr } = await supabase.from('brews').delete().eq('uid', selected.uid);
+      if (delErr) throw new Error(delErr.message);
+      setSelectedUid(null);
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t('history.delete.failed'));
+    } finally {
+      setDeleteBusy(false);
+    }
+  }
+
   useEffect(() => {
     void Promise.all([refresh(), refreshSavedBeans()]).catch((e) => {
       setError(e instanceof Error ? e.message : t('common.loadFailed'));
@@ -716,6 +734,14 @@ export function HistoryPage({ user }: Props) {
                       }}
                     >
                       {t('history.edit.start')}
+                    </button>
+                    <button
+                      type="button"
+                      className="px-3 py-2 rounded-lg border border-red-200 text-red-600 text-sm hover:bg-red-50 disabled:bg-gray-100 whitespace-nowrap"
+                      onClick={deleteSelectedBrew}
+                      disabled={deleteBusy}
+                    >
+                      {deleteBusy ? t('history.delete.deleting') : t('history.delete.button')}
                     </button>
                   </>
                 ) : (

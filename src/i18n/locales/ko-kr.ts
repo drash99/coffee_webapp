@@ -168,6 +168,10 @@ export const koKR: Record<keyof typeof enUS, string> = {
   'history.savePng.saving': 'PNG 저장 중…',
   'history.savePng.saved': 'PNG를 다운로드했습니다.',
   'history.savePng.failed': 'PNG 저장에 실패했습니다',
+  'history.delete.button': '브루 삭제',
+  'history.delete.confirm': '이 브루를 삭제하시겠습니까? 되돌릴 수 없습니다.',
+  'history.delete.deleting': '삭제 중…',
+  'history.delete.failed': '브루 삭제에 실패했습니다.',
   'history.sort.label': '정렬',
   'history.sort.dateDesc': '날짜 (최신순)',
   'history.sort.dateAsc': '날짜 (오래된순)',
@@ -201,6 +205,10 @@ export const koKR: Record<keyof typeof enUS, string> = {
   'beanHistory.edit.cancel': '취소',
   'beanHistory.edit.save': '변경사항 저장',
   'beanHistory.edit.save.saving': '저장 중…',
+  'beanHistory.delete.button': '원두 삭제',
+  'beanHistory.delete.confirm': '이 원두를 삭제하시겠습니까? 이 원두를 사용하는 모든 브루도 함께 삭제됩니다. 되돌릴 수 없습니다.',
+  'beanHistory.delete.deleting': '삭제 중…',
+  'beanHistory.delete.failed': '원두 삭제에 실패했습니다.',
 
   // Flavor wheel picker
   'flavorPicker.addNote': '노트 추가',

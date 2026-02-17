@@ -164,6 +164,10 @@ export const enUS = {
   'history.savePng.saving': 'Saving PNG…',
   'history.savePng.saved': 'PNG downloaded.',
   'history.savePng.failed': 'Failed to save PNG',
+  'history.delete.button': 'Delete brew',
+  'history.delete.confirm': 'Are you sure you want to delete this brew? This cannot be undone.',
+  'history.delete.deleting': 'Deleting…',
+  'history.delete.failed': 'Failed to delete brew.',
   'history.sort.label': 'Sort',
   'history.sort.dateDesc': 'Date (newest)',
   'history.sort.dateAsc': 'Date (oldest)',
@@ -197,6 +201,10 @@ export const enUS = {
   'beanHistory.edit.cancel': 'Cancel',
   'beanHistory.edit.save': 'Save changes',
   'beanHistory.edit.save.saving': 'Saving…',
+  'beanHistory.delete.button': 'Delete bean',
+  'beanHistory.delete.confirm': 'Are you sure you want to delete this bean? All brews using this bean will also be deleted. This cannot be undone.',
+  'beanHistory.delete.deleting': 'Deleting…',
+  'beanHistory.delete.failed': 'Failed to delete bean.',
 
   // Flavor wheel picker
   'flavorPicker.addNote': 'Add note',

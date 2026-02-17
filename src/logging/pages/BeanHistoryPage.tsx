@@ -55,6 +55,7 @@ export function BeanHistoryPage({ user }: Props) {
   const [editSaving, setEditSaving] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState<BeanInput | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
 
   const { roasteries, countries, locationsForCountry, producersForLocation, varietals } = useBeanSuggestions(user.uid);
 
@@ -133,6 +134,23 @@ export function BeanHistoryPage({ user }: Props) {
     }
   }
 
+  async function deleteSelectedBean() {
+    if (!selected) return;
+    if (!window.confirm(t('beanHistory.delete.confirm'))) return;
+    setDeleteBusy(true);
+    try {
+      const supabase = getSupabaseClient();
+      const { error: delErr } = await supabase.from('beans').delete().eq('uid', selected.uid);
+      if (delErr) throw new Error(delErr.message);
+      setSelectedUid(null);
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t('beanHistory.delete.failed'));
+    } finally {
+      setDeleteBusy(false);
+    }
+  }
+
   useEffect(() => {
     void refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -205,7 +223,7 @@ export function BeanHistoryPage({ user }: Props) {
               <div className="p-4 text-sm text-gray-500">{t('beanHistory.selectPrompt')}</div>
             ) : !isEditing ? (
               <div className="p-4 space-y-3 text-sm">
-                <div className="flex items-center justify-end">
+                <div className="flex items-center justify-end gap-2 flex-wrap">
                   <button
                     type="button"
                     className="px-3 py-2 rounded-lg bg-amber-700 text-white text-sm hover:bg-amber-800 whitespace-nowrap"
@@ -215,6 +233,14 @@ export function BeanHistoryPage({ user }: Props) {
                     }}
                   >
                     {t('beanHistory.edit.start')}
+                  </button>
+                  <button
+                    type="button"
+                    className="px-3 py-2 rounded-lg border border-red-200 text-red-600 text-sm hover:bg-red-50 disabled:bg-gray-100 whitespace-nowrap"
+                    onClick={deleteSelectedBean}
+                    disabled={deleteBusy}
+                  >
+                    {deleteBusy ? t('beanHistory.delete.deleting') : t('beanHistory.delete.button')}
                   </button>
                 </div>
 
