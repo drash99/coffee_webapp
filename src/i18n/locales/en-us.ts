@@ -169,6 +169,10 @@ export const enUS = {
   'history.sort.dateAsc': 'Date (oldest)',
   'history.sort.ratingDesc': 'Rating (high to low)',
   'history.sort.ratingAsc': 'Rating (low to high)',
+  'history.filter.button': 'Filter',
+  'history.filter.title': 'Filters',
+  'history.filter.clearAll': 'Clear all',
+  'history.filter.showing': 'Showing {shown} of {total} brews',
 
   // Public shared brew
   'sharedBrew.title': 'Shared brew',

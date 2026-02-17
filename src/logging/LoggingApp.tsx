@@ -1,9 +1,10 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useState } from 'react';
 import { isSupabaseConfigured } from '../config/supabase';
 import type { AppUser } from '../auth/types';
 import { getSupabaseClient } from '../config/supabase';
 import { logout } from '../auth/authService';
 import { clearSession, loadSessionFromSupabase, saveSession, toSessionUser } from './session';
+import { TabButton } from './components/TabButton';
 import { LoginPage } from './pages/LoginPage';
 import { SignupPage } from './pages/SignupPage';
 import { NewBrewPage } from './pages/NewBrewPage';
@@ -13,20 +14,6 @@ import { useI18n } from '../i18n/I18nProvider';
 
 type AuthTab = 'login' | 'signup';
 type LogTab = 'new' | 'history' | 'beans';
-
-function TabButton({ active, children, onClick }: { active: boolean; children: ReactNode; onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      className={`px-3 py-2 rounded-lg text-sm border ${
-        active ? 'bg-amber-700 text-white border-amber-700' : 'bg-white hover:bg-gray-50 border-gray-200'
-      }`}
-      onClick={onClick}
-    >
-      {children}
-    </button>
-  );
-}
 
 export function LoggingApp() {
   const { t } = useI18n();
@@ -125,13 +112,13 @@ export function LoggingApp() {
 
   return (
     <div className="max-w-4xl mx-auto space-y-4">
-      <div className="flex items-center justify-between">
-        <div className="text-sm text-gray-600">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className="text-sm text-gray-600 truncate min-w-0">
           {t('logging.loggedInAs')} <span className="font-medium text-gray-900">{user.id}</span>
         </div>
         <button
           type="button"
-          className="px-3 py-2 rounded-lg border bg-white text-sm hover:bg-gray-50"
+          className="px-3 py-2 rounded-lg border bg-white text-sm hover:bg-gray-50 whitespace-nowrap"
           onClick={async () => {
             try {
               await logout();
@@ -144,7 +131,7 @@ export function LoggingApp() {
         </button>
       </div>
 
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 flex-wrap">
         <TabButton active={logTab === 'new'} onClick={() => setLogTab('new')}>
           {t('logging.tab.newBrew')}
         </TabButton>

@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Coffee, Languages, Microscope, NotebookPen } from 'lucide-react';
 import { AnalysisApp } from './analysis/AnalysisApp';
 import { LoggingApp } from './logging/LoggingApp';
+import { TabButton } from './logging/components/TabButton';
 import { useI18n } from './i18n/I18nProvider';
 import { SharedBrewPage } from './logging/pages/SharedBrewPage';
 
@@ -51,29 +52,15 @@ function App() {
     };
   }, []);
 
-  function TabButton({ active, children, onClick }: { active: boolean; children: ReactNode; onClick: () => void }) {
-    return (
-      <button
-        type="button"
-        className={`px-3 py-2 rounded-lg text-sm border flex items-center gap-2 ${
-          active ? 'bg-amber-700 text-white border-amber-700' : 'bg-white hover:bg-gray-50 border-gray-200'
-        }`}
-        onClick={onClick}
-      >
-        {children}
-      </button>
-    );
-  }
-
   return (
     <div className="min-h-screen bg-gray-50 text-gray-900 font-sans p-4">
       <header className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6 max-w-5xl mx-auto">
-        <h1 className="text-2xl font-bold flex items-center gap-2">
+        <h1 className="text-2xl font-bold flex items-center gap-2 whitespace-nowrap">
           <Coffee className="w-8 h-8 text-amber-700" />
           {sharedToken ? t('sharedBrew.title') : t('app.title')}
         </h1>
         {!sharedToken && (
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <TabButton active={tab === 'analysis'} onClick={() => setTab('analysis')}>
               <Microscope className="w-4 h-4" />
               {t('app.tab.analysis')}
@@ -83,10 +70,10 @@ function App() {
               {t('app.tab.logging')}
             </TabButton>
 
-            <div ref={langRef} className="relative">
+            <div ref={langRef} className="relative ml-auto sm:ml-0">
               <button
                 type="button"
-                className="p-2 rounded-lg border bg-white hover:bg-gray-50"
+                className="p-2 rounded-lg border bg-white hover:bg-gray-50 transition-colors"
                 aria-label={t('app.langSelector.aria')}
                 onClick={() => setLangOpen((v) => !v)}
               >
@@ -97,7 +84,7 @@ function App() {
                   <button
                     type="button"
                     className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-50 ${
-                      lang === 'en-us' ? 'bg-amber-50' : 'bg-white'
+                      lang === 'en-us' ? 'bg-amber-50 font-medium' : 'bg-white'
                     }`}
                     onClick={() => {
                       setLang('en-us');
@@ -109,7 +96,7 @@ function App() {
                   <button
                     type="button"
                     className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-50 ${
-                      lang === 'ko-kr' ? 'bg-amber-50' : 'bg-white'
+                      lang === 'ko-kr' ? 'bg-amber-50 font-medium' : 'bg-white'
                     }`}
                     onClick={() => {
                       setLang('ko-kr');

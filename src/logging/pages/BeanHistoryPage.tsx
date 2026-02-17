@@ -4,6 +4,7 @@ import { getSupabaseClient } from '../../config/supabase';
 import { useI18n } from '../../i18n/I18nProvider';
 import { AutocompleteInput } from '../components/AutocompleteInput';
 import { FlavorWheelPicker } from '../components/FlavorWheelPicker';
+import { NoteDotsList } from '../components/NoteDotsList';
 import { useBeanSuggestions } from '../hooks/useBeanSuggestions';
 import { fmtDate } from '../utils/formatting';
 import { beanDisplayLabel } from '../utils/beanLabel';
@@ -42,11 +43,6 @@ function draftFromBean(bean: BeanListRow): BeanInput {
     cup_flavor_notes: (bean.cup_flavor_notes ?? []) as FlavorNote[],
     roasted_on: bean.roasted_on ?? ''
   };
-}
-
-function notesText(notes: FlavorNote[] | null | undefined, fallback: string): string {
-  if (!notes || notes.length === 0) return fallback;
-  return notes.map((n) => n.path.join(' / ')).join(', ');
 }
 
 export function BeanHistoryPage({ user }: Props) {
@@ -171,38 +167,48 @@ export function BeanHistoryPage({ user }: Props) {
       )}
 
       {rows.length > 0 && (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-3 space-y-2">
-            <div className="text-xs font-medium text-gray-500">{t('beanHistory.list.title')}</div>
-            <div className="max-h-[480px] overflow-auto space-y-1">
-              {rows.map((r) => (
-                <button
-                  key={r.uid}
-                  type="button"
-                  className={`w-full text-left p-2 rounded-lg border ${
-                    selectedUid === r.uid ? 'bg-amber-50 border-amber-200' : 'bg-white border-gray-200 hover:bg-gray-50'
-                  }`}
-                  onClick={() => setSelectedUid(r.uid)}
-                >
-                  <div className="text-sm font-medium text-gray-900 truncate">
-                    {beanDisplayLabel(r, t('history.bean.fallbackLabel'))}
-                  </div>
-                  <div className="text-xs text-gray-500">{fmtDate(r.roasted_on || r.created_at)}</div>
-                </button>
-              ))}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {/* Bean list */}
+          <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden flex flex-col">
+            <div className="px-4 py-3 border-b bg-gray-50 text-sm font-medium text-gray-700">
+              {t('beanHistory.list.title')}
+            </div>
+            <div className="divide-y overflow-y-auto max-h-[560px]">
+              {rows.map((r) => {
+                const active = selectedUid === r.uid;
+                return (
+                  <button
+                    key={r.uid}
+                    type="button"
+                    className={`w-full text-left px-4 py-3 hover:bg-gray-50 transition-colors ${
+                      active ? 'bg-amber-50 border-l-2 border-l-amber-600' : 'bg-white border-l-2 border-l-transparent'
+                    }`}
+                    onClick={() => setSelectedUid(r.uid)}
+                  >
+                    <div className="text-sm font-medium text-gray-900 truncate">
+                      {beanDisplayLabel(r, t('history.bean.fallbackLabel'))}
+                    </div>
+                    <div className="text-xs text-gray-500 mt-0.5">{fmtDate(r.roasted_on || r.created_at)}</div>
+                  </button>
+                );
+              })}
             </div>
           </div>
 
-          <div className="lg:col-span-2 bg-white rounded-xl shadow-sm border border-gray-100 p-4 space-y-4">
-            {!selected && <div className="text-sm text-gray-600">{t('beanHistory.selectPrompt')}</div>}
+          {/* Bean detail / edit */}
+          <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+            <div className="px-4 py-3 border-b bg-gray-50 text-sm font-medium text-gray-700">
+              {isEditing ? t('beanHistory.edit.title') : t('beanHistory.detail.title')}
+            </div>
 
-            {selected && !isEditing && (
-              <>
-                <div className="flex items-center justify-between">
-                  <div className="text-sm font-medium text-gray-900">{t('beanHistory.detail.title')}</div>
+            {!selected ? (
+              <div className="p-4 text-sm text-gray-500">{t('beanHistory.selectPrompt')}</div>
+            ) : !isEditing ? (
+              <div className="p-4 space-y-3 text-sm">
+                <div className="flex items-center justify-end">
                   <button
                     type="button"
-                    className="px-3 py-2 rounded-lg border bg-white text-sm hover:bg-gray-50"
+                    className="px-3 py-2 rounded-lg bg-amber-700 text-white text-sm hover:bg-amber-800 whitespace-nowrap"
                     onClick={() => {
                       setIsEditing(true);
                       setEditDraft(draftFromBean(selected));
@@ -212,52 +218,74 @@ export function BeanHistoryPage({ user }: Props) {
                   </button>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
-                  <div><span className="text-gray-500">{t('bean.field.name')}:</span> {selected.bean_name || t('common.none')}</div>
-                  <div><span className="text-gray-500">{t('bean.field.roastery')}:</span> {selected.roastery || t('common.none')}</div>
-                  <div><span className="text-gray-500">{t('bean.field.originCountry')}:</span> {selected.origin_country || t('common.none')}</div>
-                  <div><span className="text-gray-500">{t('bean.field.originLocation')}:</span> {selected.origin_location || t('common.none')}</div>
-                  <div><span className="text-gray-500">{t('bean.field.producer')}:</span> {selected.producer || t('common.none')}</div>
-                  <div><span className="text-gray-500">{t('bean.field.process')}:</span> {selected.process || t('common.none')}</div>
-                  <div><span className="text-gray-500">{t('bean.field.varietal')}:</span> {selected.varietal || t('common.none')}</div>
-                  <div><span className="text-gray-500">{t('bean.field.roastedOn')}:</span> {selected.roasted_on || t('common.none')}</div>
-                </div>
-                <div className="text-sm">
-                  <span className="text-gray-500">{t('bean.field.notesFreeText')}:</span> {selected.cup_notes || t('common.none')}
-                </div>
-                <div className="text-sm">
-                  <span className="text-gray-500">{t('bean.field.cupNotesSca')}:</span>{' '}
-                  {notesText(selected.cup_flavor_notes as FlavorNote[] | null, t('common.none'))}
-                </div>
-              </>
-            )}
-
-            {selected && isEditing && editDraft && (
-              <>
-                <div className="flex items-center justify-between">
-                  <div className="text-sm font-medium text-gray-900">{t('beanHistory.edit.title')}</div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      className="px-3 py-2 rounded-lg border bg-white text-sm hover:bg-gray-50"
-                      onClick={() => {
-                        setIsEditing(false);
-                        setEditDraft(null);
-                        setEditError(null);
-                      }}
-                      disabled={editSaving}
-                    >
-                      {t('beanHistory.edit.cancel')}
-                    </button>
-                    <button
-                      type="button"
-                      className="px-3 py-2 rounded-lg bg-amber-700 text-white text-sm disabled:bg-gray-300"
-                      onClick={() => void saveEdit()}
-                      disabled={editSaving}
-                    >
-                      {editSaving ? t('beanHistory.edit.save.saving') : t('beanHistory.edit.save')}
-                    </button>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <div className="text-xs text-gray-500">{t('bean.field.name')}</div>
+                    <div className="font-medium text-gray-900">{selected.bean_name || t('common.none')}</div>
                   </div>
+                  <div>
+                    <div className="text-xs text-gray-500">{t('bean.field.roastery')}</div>
+                    <div className="font-medium text-gray-900">{selected.roastery || t('common.none')}</div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-gray-500">{t('bean.field.originCountry')}</div>
+                    <div className="font-medium text-gray-900">{selected.origin_country || t('common.none')}</div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-gray-500">{t('bean.field.originLocation')}</div>
+                    <div className="font-medium text-gray-900">{selected.origin_location || t('common.none')}</div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-gray-500">{t('bean.field.producer')}</div>
+                    <div className="font-medium text-gray-900">{selected.producer || t('common.none')}</div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-gray-500">{t('bean.field.process')}</div>
+                    <div className="font-medium text-gray-900">{selected.process || t('common.none')}</div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-gray-500">{t('bean.field.varietal')}</div>
+                    <div className="font-medium text-gray-900">{selected.varietal || t('common.none')}</div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-gray-500">{t('bean.field.roastedOn')}</div>
+                    <div className="font-medium text-gray-900">{fmtDate(selected.roasted_on) || t('common.none')}</div>
+                  </div>
+                </div>
+
+                <div>
+                  <div className="text-xs text-gray-500">{t('bean.field.notesFreeText')}</div>
+                  <div className="whitespace-pre-wrap text-gray-900">{selected.cup_notes || t('common.none')}</div>
+                </div>
+
+                <div>
+                  <div className="text-xs text-gray-500">{t('bean.field.cupNotesSca')}</div>
+                  <NoteDotsList notes={selected.cup_flavor_notes as FlavorNote[] | null} emptyLabel={t('common.none')} />
+                </div>
+              </div>
+            ) : editDraft ? (
+              <div className="p-4 space-y-3">
+                <div className="flex items-center justify-end gap-2 flex-wrap">
+                  <button
+                    type="button"
+                    className="px-3 py-2 rounded-lg border bg-white text-sm hover:bg-gray-50 whitespace-nowrap"
+                    onClick={() => {
+                      setIsEditing(false);
+                      setEditDraft(null);
+                      setEditError(null);
+                    }}
+                    disabled={editSaving}
+                  >
+                    {t('beanHistory.edit.cancel')}
+                  </button>
+                  <button
+                    type="button"
+                    className="px-3 py-2 rounded-lg bg-amber-700 text-white text-sm disabled:bg-gray-300 whitespace-nowrap"
+                    onClick={() => void saveEdit()}
+                    disabled={editSaving}
+                  >
+                    {editSaving ? t('beanHistory.edit.save.saving') : t('beanHistory.edit.save')}
+                  </button>
                 </div>
 
                 {editError && <div className="text-sm text-red-700 bg-red-50 border border-red-100 rounded-lg p-2">{editError}</div>}
@@ -346,8 +374,8 @@ export function BeanHistoryPage({ user }: Props) {
                   value={editDraft.cup_flavor_notes}
                   onChange={(next) => setEditDraft({ ...editDraft, cup_flavor_notes: next })}
                 />
-              </>
-            )}
+              </div>
+            ) : null}
           </div>
         </div>
       )}

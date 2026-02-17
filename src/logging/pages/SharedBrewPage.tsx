@@ -132,13 +132,13 @@ export function SharedBrewPage({ token }: Props) {
 
   return (
     <div className="max-w-4xl mx-auto space-y-4">
-      <div className="bg-white rounded-xl shadow-sm border border-gray-100">
+      <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
         <div className="px-4 py-3 border-b bg-gray-50 text-sm font-medium text-gray-700 flex items-center justify-between gap-3">
           <span>{t('sharedBrew.title')}</span>
           {row && (
             <button
               type="button"
-              className="px-3 py-1.5 rounded-lg border bg-white text-xs hover:bg-gray-50 disabled:bg-gray-100"
+              className="px-3 py-1.5 rounded-lg border bg-white text-xs hover:bg-gray-50 disabled:bg-gray-100 whitespace-nowrap"
               onClick={saveAsPng}
               disabled={saveBusy}
             >

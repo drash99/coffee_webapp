@@ -173,6 +173,10 @@ export const koKR: Record<keyof typeof enUS, string> = {
   'history.sort.dateAsc': '날짜 (오래된순)',
   'history.sort.ratingDesc': '평점 (높은순)',
   'history.sort.ratingAsc': '평점 (낮은순)',
+  'history.filter.button': '필터',
+  'history.filter.title': '필터',
+  'history.filter.clearAll': '모두 지우기',
+  'history.filter.showing': '{total}개 중 {shown}개 표시',
 
   // Public shared brew
   'sharedBrew.title': '공유된 브루',

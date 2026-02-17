@@ -401,7 +401,7 @@ export function NewBrewPage({ user }: Props) {
           </div>
           <button
             type="button"
-            className="px-3 py-2 rounded-lg border bg-white text-sm hover:bg-gray-50 disabled:bg-gray-100"
+            className="px-3 py-2 rounded-lg border bg-white text-sm hover:bg-gray-50 disabled:bg-gray-100 whitespace-nowrap"
             onClick={saveBeanOnly}
             disabled={beanSaving}
           >
@@ -567,10 +567,10 @@ export function NewBrewPage({ user }: Props) {
                 placeholder={t('grindMap.placeholder.particleMedianUm')}
               />
             </div>
-            <div className="sm:col-span-2 flex items-end gap-2">
+            <div className="sm:col-span-2 flex items-end gap-2 flex-wrap">
               <button
                 type="button"
-                className="px-3 py-2 rounded-lg bg-gray-900 text-white text-sm disabled:bg-gray-300"
+                className="px-3 py-2 rounded-lg bg-amber-700 text-white text-sm hover:bg-amber-800 disabled:bg-gray-300 whitespace-nowrap"
                 onClick={submitParticleSize}
                 disabled={mapSaving}
               >
@@ -578,7 +578,7 @@ export function NewBrewPage({ user }: Props) {
               </button>
               <button
                 type="button"
-                className="px-3 py-2 rounded-lg border bg-white text-sm hover:bg-gray-50 disabled:bg-gray-100"
+                className="px-3 py-2 rounded-lg border bg-white text-sm hover:bg-gray-50 disabled:bg-gray-100 whitespace-nowrap"
                 onClick={searchParticleSizes}
                 disabled={searchLoading}
               >

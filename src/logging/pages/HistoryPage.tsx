@@ -511,7 +511,7 @@ export function HistoryPage({ user }: Props) {
             }`}
             onClick={() => setShowFilters(!showFilters)}
           >
-            Filter{activeFilterCount > 0 ? ` (${activeFilterCount})` : ''}
+            {t('history.filter.button')}{activeFilterCount > 0 ? ` (${activeFilterCount})` : ''}
           </button>
           <button
             type="button"
@@ -527,14 +527,14 @@ export function HistoryPage({ user }: Props) {
       {showFilters && (
         <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 space-y-3">
           <div className="flex items-center justify-between">
-            <div className="text-sm font-medium text-gray-700">Filters</div>
+            <div className="text-sm font-medium text-gray-700">{t('history.filter.title')}</div>
             {activeFilterCount > 0 && (
               <button
                 type="button"
                 className="text-xs text-gray-500 hover:text-gray-800"
                 onClick={() => setFilters(emptyFilters)}
               >
-                Clear all
+                {t('history.filter.clearAll')}
               </button>
             )}
           </div>
@@ -613,7 +613,7 @@ export function HistoryPage({ user }: Props) {
             </div>
           </div>
           <div className="text-xs text-gray-500">
-            Showing {sortedRows.length} of {rows.length} brews
+            {t('history.filter.showing', { shown: sortedRows.length, total: rows.length })}
           </div>
         </div>
       )}
@@ -621,11 +621,11 @@ export function HistoryPage({ user }: Props) {
       {error && <div className="text-sm text-red-700 bg-red-50 border border-red-100 rounded-lg p-2">{error}</div>}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden flex flex-col">
           <div className="px-4 py-3 border-b bg-gray-50 flex items-center justify-between gap-3">
-            <div className="text-sm font-medium text-gray-700">{t('history.list.title')}</div>
+            <div className="text-sm font-medium text-gray-700 whitespace-nowrap">{t('history.list.title')}</div>
             <div className="flex items-center gap-2">
-              <label className="text-xs text-gray-500">{t('history.sort.label')}</label>
+              <label className="text-xs text-gray-500 whitespace-nowrap">{t('history.sort.label')}</label>
               <select
                 className="text-xs border rounded-md px-2 py-1 bg-white"
                 value={sortMode}
@@ -641,7 +641,7 @@ export function HistoryPage({ user }: Props) {
           {sortedRows.length === 0 && !loading ? (
             <div className="p-4 text-sm text-gray-500">{t('history.empty')}</div>
           ) : (
-            <div className="divide-y">
+            <div className="divide-y overflow-y-auto max-h-[560px]">
               {sortedRows.map((r) => {
                 const beanLabel =
                   r.beans?.bean_name ||
@@ -655,20 +655,24 @@ export function HistoryPage({ user }: Props) {
                     key={r.uid}
                     type="button"
                     onClick={() => setSelectedUid(r.uid)}
-                    className={`w-full text-left px-4 py-3 hover:bg-gray-50 ${
-                      active ? 'bg-amber-50' : 'bg-white'
+                    className={`w-full text-left px-4 py-3 hover:bg-gray-50 transition-colors ${
+                      active ? 'bg-amber-50 border-l-2 border-l-amber-600' : 'bg-white border-l-2 border-l-transparent'
                     }`}
                   >
-                    <div className="text-sm font-medium text-gray-900">
-                      {fmtDate(r.brew_date)} — {beanLabel} · ★
-                      {r.rating == null ? t('common.none') : Number(r.rating).toFixed(1)}
+                    <div className="text-sm font-medium text-gray-900 truncate">
+                      {fmtDate(r.brew_date)} — {beanLabel}
                     </div>
-                    <div className="text-xs text-gray-500">
-                      {t('history.list.summary', {
-                        dose: r.coffee_dose_g ?? t('common.none'),
-                        yield: r.coffee_yield_g ?? t('common.none'),
-                        tds: r.coffee_tds ?? t('common.na')
-                      })}
+                    <div className="flex items-center justify-between gap-2 mt-0.5">
+                      <div className="text-xs text-gray-500 truncate">
+                        {t('history.list.summary', {
+                          dose: r.coffee_dose_g ?? t('common.none'),
+                          yield: r.coffee_yield_g ?? t('common.none'),
+                          tds: r.coffee_tds ?? t('common.na')
+                        })}
+                      </div>
+                      <div className="text-xs text-amber-700 font-medium whitespace-nowrap">
+                        ★ {r.rating == null ? t('common.none') : Number(r.rating).toFixed(1)}
+                      </div>
                     </div>
                   </button>
                 );
@@ -677,18 +681,18 @@ export function HistoryPage({ user }: Props) {
           )}
         </div>
 
-        <div className="bg-white rounded-xl shadow-sm border border-gray-100">
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
           <div className="px-4 py-3 border-b bg-gray-50 text-sm font-medium text-gray-700">{t('history.detail.title')}</div>
           {!selected ? (
             <div className="p-4 text-sm text-gray-500">{t('history.selectPrompt')}</div>
           ) : (
             <div className="p-4 space-y-3 text-sm">
-              <div className="flex items-center justify-end gap-2">
+              <div className="flex items-center justify-end gap-2 flex-wrap">
                 {!isEditing ? (
                   <>
                     <button
                       type="button"
-                      className="px-3 py-2 rounded-lg border bg-white text-sm hover:bg-gray-50 disabled:bg-gray-100"
+                      className="px-3 py-2 rounded-lg border bg-white text-sm hover:bg-gray-50 disabled:bg-gray-100 whitespace-nowrap"
                       onClick={shareSelectedBrew}
                       disabled={shareBusy}
                     >
@@ -696,7 +700,7 @@ export function HistoryPage({ user }: Props) {
                     </button>
                     <button
                       type="button"
-                      className="px-3 py-2 rounded-lg border bg-white text-sm hover:bg-gray-50 disabled:bg-gray-100"
+                      className="px-3 py-2 rounded-lg border bg-white text-sm hover:bg-gray-50 disabled:bg-gray-100 whitespace-nowrap"
                       onClick={saveSelectedAsPng}
                       disabled={savePngBusy}
                     >
@@ -704,7 +708,7 @@ export function HistoryPage({ user }: Props) {
                     </button>
                     <button
                       type="button"
-                      className="px-3 py-2 rounded-lg border bg-white text-sm hover:bg-gray-50"
+                      className="px-3 py-2 rounded-lg bg-amber-700 text-white text-sm hover:bg-amber-800 whitespace-nowrap"
                       onClick={() => {
                         setEditDraft(draftFromBrew(selected));
                         setIsEditing(true);
@@ -718,7 +722,7 @@ export function HistoryPage({ user }: Props) {
                   <>
                     <button
                       type="button"
-                      className="px-3 py-2 rounded-lg border bg-white text-sm hover:bg-gray-50 disabled:bg-gray-100"
+                      className="px-3 py-2 rounded-lg border bg-white text-sm hover:bg-gray-50 disabled:bg-gray-100 whitespace-nowrap"
                       onClick={() => {
                         setIsEditing(false);
                         setEditDraft(null);
@@ -730,7 +734,7 @@ export function HistoryPage({ user }: Props) {
                     </button>
                     <button
                       type="button"
-                      className="px-3 py-2 rounded-lg bg-amber-700 text-white text-sm disabled:bg-gray-300"
+                      className="px-3 py-2 rounded-lg bg-amber-700 text-white text-sm disabled:bg-gray-300 whitespace-nowrap"
                       onClick={saveEditedBrew}
                       disabled={editSaving || !editDraft}
                     >
