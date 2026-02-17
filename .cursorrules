@@ -2,92 +2,156 @@
 
 ## Project Overview
 
-BeanLog is a zero-cost, local-first Progressive Web App (PWA) for specialty coffee analytics.
-It has two main features:
-1. **Analysis** — Computer vision (OpenCV.js) to analyze bean size, roast level, and grind distribution via a printable calibration target.
+BeanLog is a zero-cost, local-first Progressive Web App (PWA) + native mobile app for specialty coffee analytics.
+It ships as a **single codebase** that runs on web, iOS, and Android via **Capacitor**.
+
+Two main features:
+1. **Analysis** — Computer vision (OpenCV.js / WASM) to analyze bean size, roast level, and grind distribution via a printable calibration target.
 2. **Logging** — Brew journal backed by Supabase (auth + Postgres + RLS). Users log beans, grinders, and brews with SCA flavor wheel notes.
 
 ## Tech Stack
 
-- **Frontend:** React 18, TypeScript, Vite 5, Tailwind CSS 3, Lucide Icons
-- **PWA:** `vite-plugin-pwa` for offline capability
-- **Backend:** Supabase (Auth, Postgres with Row Level Security)
-- **Charts:** `chart.js` + `react-chartjs-2`
-- **CV:** OpenCV.js loaded in a Web Worker (`src/workers/cv.worker.ts`)
-- **i18n:** Custom lightweight system (`src/i18n/`) — English (`en-us`) and Korean (`ko-kr`)
+| Layer | Technology |
+|---|---|
+| **Frontend** | React 18, TypeScript (strict), Vite 5, Tailwind CSS 3, Lucide Icons |
+| **PWA** | `vite-plugin-pwa` for offline web capability |
+| **Native shell** | Capacitor 8 (wraps the Vite build in iOS/Android WebView) |
+| **Native plugins** | `@capacitor/camera`, `@capacitor/haptics`, `@capacitor/app`, `@capacitor/status-bar` |
+| **Backend** | Supabase (Auth, Postgres with Row Level Security) |
+| **Charts** | `chart.js` + `react-chartjs-2` |
+| **CV** | OpenCV.js (WASM) loaded in a Web Worker (`src/workers/cv.worker.ts`) |
+| **i18n** | Custom lightweight system (`src/i18n/`) — English (`en-us`) and Korean (`ko-kr`) |
 
 ## Directory Structure
 
 ```
-src/
-├── App.tsx                    # Root: tab switcher (Analysis / Logging) + shared link handler
-├── main.tsx                   # React entry point, wraps App in I18nProvider
-├── index.css                  # Tailwind base + global styles
-├── vite-env.d.ts              # Vite env types
-│
-├── analysis/                  # CV-based bean/grind analysis (standalone tab)
-│   └── AnalysisApp.tsx
-│
-├── auth/                      # Authentication layer
-│   ├── authService.ts         # signup/login/logout via Supabase Auth
-│   ├── crypto.ts              # PBKDF2 hashing helpers (Web Crypto API)
-│   └── types.ts               # AppUser type
-│
-├── components/                # Shared components used by analysis
-│   ├── ImageUpload.tsx
-│   └── ResultsDisplay.tsx
-│
-├── config/                    # Supabase client singleton
-│   ├── supabase.ts
-│   ├── supabase.credentials.ts        # Reads VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY
-│   └── supabase.credentials.example.ts
-│
-├── i18n/                      # Internationalization
-│   ├── i18n.ts                # LOCALES map, format() helper, LanguageCode type
-│   ├── I18nProvider.tsx        # React context + useI18n() hook
-│   ├── prefs.ts               # Persist language preference in localStorage
-│   └── locales/
-│       ├── en-us.ts
-│       └── ko-kr.ts
-│
-├── logging/                   # Brew logging feature (Supabase-backed)
-│   ├── LoggingApp.tsx         # Auth gate + tab nav (New brew / History / Beans)
-│   ├── types.ts               # Domain types: BeanInput, BrewInput, GrinderInput, *Row types
-│   ├── session.ts             # localStorage session persistence + Supabase session restore
-│   ├── scaFlavorWheel.ts      # SCA flavor wheel taxonomy tree + helpers
+coffee_webapp/
+├── src/                            # Shared React app (runs on ALL platforms)
+│   ├── App.tsx                     # Root: tab switcher (Analysis / Logging) + shared link handler
+│   ├── main.tsx                    # React entry point, wraps App in I18nProvider
+│   ├── index.css                   # Tailwind base + global styles
+│   ├── vite-env.d.ts               # Vite env types
 │   │
-│   ├── components/            # Reusable logging UI components
-│   │   ├── AutocompleteInput.tsx   # Text input with filterable dropdown suggestions
-│   │   ├── FlavorWheelPicker.tsx   # 3-level cascading SCA flavor note picker
-│   │   ├── NoteDotsList.tsx        # Renders FlavorNote[] as colored dot chips
-│   │   └── StarRating.tsx          # Half-star rating widget (0–5, step 0.5)
+│   ├── platform/                   # ★ Platform abstraction layer
+│   │   ├── index.ts                # Barrel export
+│   │   ├── platform.ts             # getPlatform(), isNative() — detect web/ios/android
+│   │   ├── camera.ts               # pickImageNative(), hasNativeCamera() — Capacitor camera
+│   │   └── haptics.ts              # hapticTap(), hapticImpact() — tactile feedback on native
 │   │
-│   ├── hooks/                 # Data-fetching hooks for suggestion autocomplete
-│   │   ├── useBeanSuggestions.ts   # Hierarchical: roastery, country → location → producer
-│   │   └── useGrinderSuggestions.ts
+│   ├── analysis/                   # CV-based bean/grind analysis (standalone tab)
+│   │   └── AnalysisApp.tsx
 │   │
-│   ├── pages/                 # Full page-level components
-│   │   ├── NewBrewPage.tsx    # Create a new brew (bean + grinder + brew form)
-│   │   ├── HistoryPage.tsx    # Browse, filter, sort, edit, share brews
-│   │   ├── BeanHistoryPage.tsx # Browse + edit saved beans
-│   │   ├── SharedBrewPage.tsx # Public read-only view of a shared brew
-│   │   ├── LoginPage.tsx
-│   │   └── SignupPage.tsx
+│   ├── auth/                       # Authentication layer
+│   │   ├── authService.ts          # signup/login/logout via Supabase Auth
+│   │   ├── crypto.ts               # PBKDF2 hashing helpers (Web Crypto API)
+│   │   └── types.ts                # AppUser type
 │   │
-│   └── utils/                 # Pure helper functions
-│       ├── formatting.ts      # toNullableNumber, fmtDate, todayYMD, isoToYmd, fToC, unique
-│       ├── beanLabel.ts       # beanDisplayLabel — consistent label for bean selects/lists
-│       └── brewPng.ts         # Canvas-based PNG export of brew details
+│   ├── components/                 # Shared components used by analysis
+│   │   ├── ImageUpload.tsx         # Unified upload: native camera on mobile, file input on web
+│   │   └── ResultsDisplay.tsx
+│   │
+│   ├── config/                     # Supabase client singleton
+│   │   ├── supabase.ts
+│   │   ├── supabase.credentials.ts        # Reads VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY
+│   │   └── supabase.credentials.example.ts
+│   │
+│   ├── i18n/                       # Internationalization
+│   │   ├── i18n.ts                 # LOCALES map, format() helper, LanguageCode type
+│   │   ├── I18nProvider.tsx         # React context + useI18n() hook
+│   │   ├── prefs.ts                # Persist language preference in localStorage
+│   │   └── locales/
+│   │       ├── en-us.ts
+│   │       └── ko-kr.ts
+│   │
+│   ├── logging/                    # Brew logging feature (Supabase-backed)
+│   │   ├── LoggingApp.tsx          # Auth gate + tab nav (New brew / History / Beans)
+│   │   ├── types.ts                # Domain types: BeanInput, BrewInput, GrinderInput, *Row types
+│   │   ├── session.ts              # localStorage session persistence + Supabase session restore
+│   │   ├── scaFlavorWheel.ts       # SCA flavor wheel taxonomy tree + helpers
+│   │   │
+│   │   ├── components/             # Reusable logging UI components
+│   │   │   ├── AutocompleteInput.tsx   # Text input with filterable dropdown suggestions
+│   │   │   ├── FlavorWheelPicker.tsx   # 3-level cascading SCA flavor note picker
+│   │   │   ├── NoteDotsList.tsx        # Renders FlavorNote[] as colored dot chips
+│   │   │   ├── StarRating.tsx          # Half-star rating widget (0–5, step 0.5)
+│   │   │   └── TabButton.tsx           # Shared tab button with active state styling
+│   │   │
+│   │   ├── hooks/                  # Data-fetching hooks for suggestion autocomplete
+│   │   │   ├── useBeanSuggestions.ts   # Hierarchical: roastery, country → location → producer
+│   │   │   └── useGrinderSuggestions.ts
+│   │   │
+│   │   ├── pages/                  # Full page-level components
+│   │   │   ├── NewBrewPage.tsx     # Create a new brew (bean + grinder + brew form)
+│   │   │   ├── HistoryPage.tsx     # Browse, filter, sort, edit, delete, share brews
+│   │   │   ├── BeanHistoryPage.tsx # Browse, edit, delete saved beans
+│   │   │   ├── SharedBrewPage.tsx  # Public read-only view of a shared brew
+│   │   │   ├── LoginPage.tsx
+│   │   │   └── SignupPage.tsx
+│   │   │
+│   │   └── utils/                  # Pure helper functions
+│   │       ├── formatting.ts       # toNullableNumber, fmtDate, todayYMD, isoToYmd, fToC, unique
+│   │       ├── beanLabel.ts        # beanDisplayLabel — consistent label for bean selects/lists
+│   │       └── brewPng.ts          # Canvas-based PNG export of brew details
+│   │
+│   └── workers/
+│       └── cv.worker.ts            # Web Worker: ArUco detection, perspective warp, analysis
 │
-├── workers/
-│   └── cv.worker.ts           # Web Worker: ArUco detection, perspective warp, analysis
+├── android/                        # ★ Capacitor Android project (auto-generated, customize as needed)
+│   ├── app/src/main/
+│   │   ├── AndroidManifest.xml     # Permissions (camera, internet)
+│   │   ├── java/com/beanlog/app/   # MainActivity.java
+│   │   ├── res/                    # Icons, splash screens, layouts
+│   │   └── assets/public/          # Web assets (copied by `cap sync`)
+│   └── ...
 │
-supabase/
-├── schema.sql                 # Full schema (tables, triggers, RLS policies, functions)
-├── seed_debug_data.sql
-├── clean_reset.sql
-└── patch_*.sql                # Incremental schema patches (dated)
+├── ios/                            # ★ Capacitor iOS project (auto-generated, customize as needed)
+│   ├── App/App/
+│   │   ├── AppDelegate.swift
+│   │   ├── Info.plist              # Permissions (NSCameraUsageDescription, etc.)
+│   │   ├── Assets.xcassets/        # App icon, splash screen
+│   │   └── public/                 # Web assets (copied by `cap sync`)
+│   └── ...
+│
+├── supabase/                       # Database schema & migrations
+│   ├── schema.sql                  # Full schema (tables, triggers, RLS policies, functions)
+│   ├── seed_debug_data.sql
+│   ├── clean_reset.sql
+│   └── patch_*.sql                 # Incremental schema patches (dated)
+│
+├── capacitor.config.ts             # ★ Capacitor configuration (appId, webDir, plugins)
+├── vite.config.ts                  # Vite build config
+├── tailwind.config.js
+├── tsconfig.json
+└── package.json                    # Scripts: dev, build, cap:sync, cap:android, cap:ios
 ```
+
+## Mobile Development Workflow
+
+### Build & deploy cycle
+```bash
+npm run build                # Build the Vite web app → dist/
+npm run cap:sync             # Build + copy web assets to ios/ and android/
+npm run cap:android          # Open Android Studio
+npm run cap:ios              # Open Xcode (macOS only)
+npm run cap:run:android      # Build + sync + run on connected Android device/emulator
+npm run cap:run:ios          # Build + sync + run on connected iOS device/simulator
+```
+
+### Platform abstraction (`src/platform/`)
+All platform-specific behavior is isolated in `src/platform/`:
+- **`isNative()`** — returns `true` inside Capacitor shell (iOS/Android), `false` on web.
+- **`getPlatform()`** — returns `'web'`, `'ios'`, or `'android'`.
+- **`pickImageNative()`** — opens native camera/gallery picker on mobile, returns `File`. Returns `null` on web.
+- **`hasNativeCamera()`** — `true` on native, `false` on web. Use to toggle between camera button vs file input.
+- **`hapticTap()` / `hapticImpact()`** — tactile feedback on native, no-op on web.
+
+### Adding a new native capability
+1. Install the Capacitor plugin: `npm install @capacitor/plugin-name`
+2. Create a wrapper in `src/platform/newCapability.ts` that:
+   - Checks `Capacitor.isNativePlatform()` before calling the plugin
+   - No-ops or falls back gracefully on web
+3. Export from `src/platform/index.ts`
+4. Run `npx cap sync` to update native projects
 
 ## Coding Conventions
 
@@ -109,8 +173,11 @@ supabase/
 - **Tailwind CSS** for all styling. No CSS modules, no styled-components.
 - Amber (`amber-700`) as the primary accent color.
 - White card containers: `bg-white p-6 rounded-xl shadow-sm border border-gray-100`.
+- Header bars in list/detail panels: `px-4 py-3 border-b bg-gray-50 text-sm font-medium text-gray-700`.
 - Input styling: `w-full p-2 border rounded-lg`.
-- Button: primary = `bg-amber-700 text-white`, secondary = `border bg-white hover:bg-gray-50`.
+- Button: primary = `bg-amber-700 text-white hover:bg-amber-800`, secondary = `border bg-white hover:bg-gray-50`.
+- Destructive button: `border border-red-200 text-red-600 hover:bg-red-50`.
+- All buttons get `whitespace-nowrap` to prevent text splitting. Button groups get `flex-wrap`.
 
 ### Database / Supabase
 - All tables use `uuid` primary keys generated client-side (`crypto.randomUUID()`).
@@ -119,6 +186,7 @@ supabase/
 - Temperatures are stored in Celsius (`water_temp_c`). The UI supports F→C conversion on input.
 - The `brews` table has a join to `beans` (required) and `grinders` (optional).
 - Flavor notes are stored both as JSONB on the parent row AND in normalized tables (`bean_flavor_notes`, `brew_flavor_notes`) for filtering.
+- **Cascade deletes:** `beans → brews → brew_shares, brew_flavor_notes`. Deleting a bean deletes all its brews.
 
 ### Shared Utilities (in `src/logging/utils/`)
 - `toNullableNumber(s)` — parse string to `number | null`, returns null for empty/NaN.
@@ -134,6 +202,7 @@ supabase/
 - Utilities: `camelCase.ts`
 - Types file: `types.ts` (one per feature module)
 - Locale files: `en-us.ts`, `ko-kr.ts`
+- Platform abstractions: `camelCase.ts` in `src/platform/`
 
 ### Adding a New i18n Key
 1. Add the key + English text to `src/i18n/locales/en-us.ts`.
@@ -158,4 +227,6 @@ supabase/
 - **UUID generation** is client-side via `crypto.randomUUID()`.
 - When adding features to the logging module, follow the pattern in `NewBrewPage.tsx`.
 - Import shared utils from `src/logging/utils/` — do not duplicate utility functions.
-
+- **Platform-specific code** must go through `src/platform/` — never import `@capacitor/*` directly in components.
+- **Do NOT edit files under `android/` or `ios/`** unless explicitly asked — they are managed by Capacitor.
+- After code changes, run `npm run cap:sync` to push web assets to native projects.

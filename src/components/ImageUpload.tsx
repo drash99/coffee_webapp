@@ -1,6 +1,7 @@
 import { useRef } from 'react';
-import { Upload, Coffee, BarChart3 } from 'lucide-react';
+import { Upload, Camera, Coffee, BarChart3 } from 'lucide-react';
 import { useI18n } from '../i18n/I18nProvider';
+import { hasNativeCamera, pickImageNative } from '../platform';
 
 interface ImageUploadProps {
   mode: 'bean' | 'grind';
@@ -11,9 +12,17 @@ interface ImageUploadProps {
 export function ImageUpload({ mode, onImageSelect, disabled }: ImageUploadProps) {
   const { t } = useI18n();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const native = hasNativeCamera();
 
-  const handleClick = () => {
-    fileInputRef.current?.click();
+  const handleClick = async () => {
+    if (native) {
+      // On native, use the Capacitor camera / gallery picker
+      const file = await pickImageNative();
+      if (file) onImageSelect(file);
+    } else {
+      // On web, trigger the hidden file input
+      fileInputRef.current?.click();
+    }
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -30,23 +39,24 @@ export function ImageUpload({ mode, onImageSelect, disabled }: ImageUploadProps)
         {mode === 'bean' ? t('upload.bean.title') : t('upload.grind.title')}
       </h2>
       
-      {/* Explicit MIME types instead of image/* to prevent iOS from
-          bundling Live-Photo video data with the selected still image. */}
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept="image/jpeg,image/png,image/heic,image/heif,image/webp"
-        onChange={handleFileChange}
-        className="hidden"
-        disabled={disabled}
-      />
+      {/* Hidden file input — only used on web */}
+      {!native && (
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/jpeg,image/png,image/heic,image/heif,image/webp"
+          onChange={handleFileChange}
+          className="hidden"
+          disabled={disabled}
+        />
+      )}
       
       <button
         onClick={handleClick}
         disabled={disabled}
-        className="w-full py-3 bg-gray-900 text-white rounded-lg font-medium hover:bg-gray-800 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+        className="w-full py-3 bg-amber-700 text-white rounded-lg font-medium hover:bg-amber-800 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
       >
-        <Upload className="w-5 h-5" />
+        {native ? <Camera className="w-5 h-5" /> : <Upload className="w-5 h-5" />}
         {t('upload.button', { mode: mode === 'bean' ? t('upload.mode.bean') : t('upload.mode.grind') })}
       </button>
       
@@ -58,4 +68,3 @@ export function ImageUpload({ mode, onImageSelect, disabled }: ImageUploadProps)
     </div>
   );
 }
-

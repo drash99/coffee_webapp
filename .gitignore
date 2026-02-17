@@ -160,3 +160,12 @@ test_*.png
 # OpenCV build artifacts
 opencv_build/
 
+# Capacitor native projects
+# NOTE: Capacitor docs recommend committing ios/ and android/ since they
+# contain native configuration (permissions, splash screens, etc.).
+# However, they can be regenerated with `npx cap add ios` / `npx cap add android`
+# followed by `npx cap sync`. Uncomment the lines below if you prefer
+# to NOT track native projects in git:
+# ios/
+# android/
+
