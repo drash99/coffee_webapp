@@ -7,7 +7,7 @@ It ships as a **single codebase** that runs on web, iOS, and Android via **Capac
 
 Two main features:
 1. **Analysis** — Computer vision (OpenCV.js / WASM) to analyze bean size, roast level, and grind distribution via a printable calibration target.
-2. **Logging** — Brew journal backed by Supabase (auth + Postgres + RLS). Users log beans, grinders, and brews with SCA flavor wheel notes.
+2. **Logging** — Brew journal backed by Supabase (auth + Postgres + RLS) **or local storage (guest mode)**. Users log beans, grinders, and brews with SCA flavor wheel notes. Guest users store everything in `localStorage` and can migrate to Supabase on signup.
 
 ## Tech Stack
 
@@ -63,11 +63,16 @@ coffee_webapp/
 │   │       ├── en-us.ts
 │   │       └── ko-kr.ts
 │   │
-│   ├── logging/                    # Brew logging feature (Supabase-backed)
-│   │   ├── LoggingApp.tsx          # Auth gate + tab nav (New brew / History / Beans)
+│   ├── logging/                    # Brew logging feature (Supabase-backed + guest local storage)
+│   │   ├── LoggingApp.tsx          # Auth gate + guest mode + tab nav (New brew / History / Beans)
 │   │   ├── types.ts                # Domain types: BeanInput, BrewInput, GrinderInput, *Row types
 │   │   ├── session.ts              # localStorage session persistence + Supabase session restore
 │   │   ├── scaFlavorWheel.ts       # SCA flavor wheel taxonomy tree + helpers
+│   │   │
+│   │   ├── storage/                # ★ Local storage for guest mode
+│   │   │   ├── index.ts            # Barrel export
+│   │   │   └── localDb.ts          # localStorage CRUD: beans, brews, grinders, particle sizes
+│   │   │                           #   + guest session flag + migration (local → Supabase)
 │   │   │
 │   │   ├── components/             # Reusable logging UI components
 │   │   │   ├── AutocompleteInput.tsx   # Text input with filterable dropdown suggestions
@@ -166,6 +171,7 @@ All platform-specific behavior is isolated in `src/platform/`:
 - **State management:** Local `useState` + prop drilling. No global store (Redux/Zustand).
 - **Data fetching:** Inline `async` functions inside `useEffect` or event handlers. No React Query.
 - **Supabase calls:** Always go through `getSupabaseClient()` from `src/config/supabase.ts`.
+- **Guest mode:** Pages receive `isGuest` prop. When `true`, CRUD routes to `src/logging/storage/localDb.ts` instead of Supabase. Share-brew is disabled in guest mode.
 - **i18n:** Always use `const { t } = useI18n()` for user-visible strings. Never hardcode English text in JSX.
 - **Form state:** String-based state (`BrewInput` uses strings) parsed to numbers on save via `toNullableNumber()`.
 
@@ -187,6 +193,15 @@ All platform-specific behavior is isolated in `src/platform/`:
 - The `brews` table has a join to `beans` (required) and `grinders` (optional).
 - Flavor notes are stored both as JSONB on the parent row AND in normalized tables (`bean_flavor_notes`, `brew_flavor_notes`) for filtering.
 - **Cascade deletes:** `beans → brews → brew_shares, brew_flavor_notes`. Deleting a bean deletes all its brews.
+
+### Guest Mode / Local Storage (`src/logging/storage/`)
+- **Entry point:** "Continue as guest" button on the login screen (works even without Supabase configured).
+- **Persistence:** `beanlog.guest.active` flag + JSON arrays in `localStorage` under `beanlog.local.*` keys.
+- **Data shape:** Same `*Row` types as Supabase — `user_uid` set to `'guest'`.
+- **Cascade deletes:** `localDeleteBean()` also removes brews referencing that bean.
+- **Suggestions in guest mode:** Derived inline from loaded local data (hooks pass `undefined` uid → return empty).
+- **Migration:** `migrateLocalToSupabase()` inserts all local data into Supabase (grinders → beans → brews → particle sizes, respecting FK order), then clears local storage. Called from LoggingApp after a guest signs up.
+- **Share brew is disabled** in guest mode (requires Supabase `brew_shares` table).
 
 ### Shared Utilities (in `src/logging/utils/`)
 - `toNullableNumber(s)` — parse string to `number | null`, returns null for empty/NaN.

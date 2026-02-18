@@ -210,6 +210,18 @@ export const koKR: Record<keyof typeof enUS, string> = {
   'beanHistory.delete.deleting': '삭제 중…',
   'beanHistory.delete.failed': '원두 삭제에 실패했습니다.',
 
+  // Guest mode
+  'guest.button': '게스트로 계속하기',
+  'guest.banner': '게스트 모드 — 데이터가 이 기기에만 저장됩니다.',
+  'guest.banner.signup': '회원가입하여 기기 간 동기화',
+  'guest.exit': '게스트 모드 나가기',
+  'guest.migrate.button': '클라우드로 데이터 이동',
+  'guest.migrate.confirm': '로컬 데이터(원두 {beans}개, 브루 {brews}개)를 계정으로 이동하시겠습니까?',
+  'guest.migrate.migrating': '마이그레이션 중…',
+  'guest.migrate.done': '모든 데이터가 성공적으로 마이그레이션되었습니다!',
+  'guest.migrate.failed': '마이그레이션 실패: {message}',
+  'guest.noSupabase': 'Supabase가 설정되지 않았습니다. 게스트 모드로 사용하실 수 있습니다 — 데이터는 이 기기에 저장됩니다.',
+
   // Flavor wheel picker
   'flavorPicker.addNote': '노트 추가',
   'flavorPicker.tip': '팁: 대분류(레벨 1)만 추가하거나 더 좁혀서 선택할 수 있어요.',

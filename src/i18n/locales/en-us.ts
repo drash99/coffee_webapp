@@ -206,6 +206,18 @@ export const enUS = {
   'beanHistory.delete.deleting': 'Deleting…',
   'beanHistory.delete.failed': 'Failed to delete bean.',
 
+  // Guest mode
+  'guest.button': 'Continue as guest',
+  'guest.banner': 'Guest mode — data stored on this device only.',
+  'guest.banner.signup': 'Sign up to sync across devices',
+  'guest.exit': 'Exit guest mode',
+  'guest.migrate.button': 'Move data to cloud',
+  'guest.migrate.confirm': 'Move all local data ({beans} beans, {brews} brews) to your account?',
+  'guest.migrate.migrating': 'Migrating…',
+  'guest.migrate.done': 'All data migrated successfully!',
+  'guest.migrate.failed': 'Migration failed: {message}',
+  'guest.noSupabase': 'Supabase is not configured. You can still use guest mode — data will be stored on this device.',
+
   // Flavor wheel picker
   'flavorPicker.addNote': 'Add note',
   'flavorPicker.tip': 'Tip: you can add just broad notes (level 1), or narrow down further.',

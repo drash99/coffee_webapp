@@ -7,12 +7,24 @@ import { AutocompleteInput } from '../components/AutocompleteInput';
 import { useGrinderSuggestions } from '../hooks/useGrinderSuggestions';
 import { useBeanSuggestions } from '../hooks/useBeanSuggestions';
 import { toNullableNumber, todayYMD, fToC } from '../utils/formatting';
+import { unique } from '../utils/formatting';
 import { beanDisplayLabel } from '../utils/beanLabel';
 import type { BeanInput, BrewInput, FlavorNote, GrinderInput } from '../types';
 import { useI18n } from '../../i18n/I18nProvider';
+import {
+  localListBeans,
+  localInsertBean,
+  localUpdateBean,
+  localGetOrCreateGrinder,
+  localInsertBrew,
+  localInsertParticleSize,
+  localSearchParticleSizes,
+  localListGrinders,
+} from '../storage';
 
 type Props = {
   user: AppUser;
+  isGuest?: boolean;
 };
 
 type SavedBeanOption = {
@@ -43,7 +55,7 @@ const emptyBean: BeanInput = {
   roasted_on: ''
 };
 
-export function NewBrewPage({ user }: Props) {
+export function NewBrewPage({ user, isGuest = false }: Props) {
   const { t } = useI18n();
   const [bean, setBean] = useState<BeanInput>(emptyBean);
   const [savedBeans, setSavedBeans] = useState<SavedBeanOption[]>([]);
@@ -85,8 +97,72 @@ export function NewBrewPage({ user }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
 
-  const { makers, modelsForMaker } = useGrinderSuggestions(user.uid);
-  const { roasteries, countries, locationsForCountry, producersForLocation, varietals } = useBeanSuggestions(user.uid);
+  // --- Suggestions: hooks for Supabase, inline derivation for guest ---
+  const hookBeanSugg = useBeanSuggestions(isGuest ? undefined : user.uid);
+  const hookGrinderSugg = useGrinderSuggestions(isGuest ? undefined : user.uid);
+
+  // Guest mode: derive suggestions from locally loaded data
+  const guestBeanSugg = useMemo(() => {
+    if (!isGuest) return null;
+    const beans = savedBeans;
+    return {
+      roasteries: unique(beans.map((b) => (b.roastery ?? '').trim())),
+      countries: unique(beans.map((b) => (b.origin_country ?? '').trim())),
+      varietals: unique(beans.map((b) => (b.varietal ?? '').trim())),
+      locationsForCountry(country: string) {
+        const lc = country.toLowerCase().trim();
+        if (!lc) return unique(beans.map((b) => (b.origin_location ?? '').trim()));
+        return unique(beans.filter((b) => (b.origin_country ?? '').toLowerCase().trim() === lc).map((b) => (b.origin_location ?? '').trim()));
+      },
+      producersForLocation(country: string, location: string) {
+        const lcC = country.toLowerCase().trim();
+        const lcL = location.toLowerCase().trim();
+        let filtered = beans.map((b) => ({
+          origin_country: (b.origin_country ?? '').trim(),
+          origin_location: (b.origin_location ?? '').trim(),
+          producer: (b.producer ?? '').trim(),
+        }));
+        if (lcC) filtered = filtered.filter((b) => b.origin_country.toLowerCase() === lcC);
+        if (lcL) filtered = filtered.filter((b) => b.origin_location.toLowerCase() === lcL);
+        return unique(filtered.map((b) => b.producer));
+      },
+    };
+  }, [isGuest, savedBeans]);
+
+  const guestGrinderSugg = useMemo(() => {
+    if (!isGuest) return null;
+    const grinders = localListGrinders();
+    const makers = Array.from(new Map(grinders.map((g) => [(g.maker ?? '').toLowerCase(), g.maker ?? ''])).values())
+      .filter(Boolean)
+      .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+    return {
+      makers,
+      modelsForMaker(maker: string) {
+        const lc = maker.toLowerCase().trim();
+        const models = grinders
+          .filter((g) => (g.maker ?? '').toLowerCase().trim() === lc)
+          .map((g) => g.model ?? '');
+        return Array.from(new Map(models.map((m) => [m.toLowerCase(), m])).values())
+          .filter(Boolean)
+          .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+      },
+    };
+  }, [isGuest]);
+
+  // Unified suggestion accessors
+  const roasteries = isGuest ? (guestBeanSugg?.roasteries ?? []) : hookBeanSugg.roasteries;
+  const countries = isGuest ? (guestBeanSugg?.countries ?? []) : hookBeanSugg.countries;
+  const varietals = isGuest ? (guestBeanSugg?.varietals ?? []) : hookBeanSugg.varietals;
+  const locationsForCountry = isGuest
+    ? (c: string) => guestBeanSugg?.locationsForCountry(c) ?? []
+    : hookBeanSugg.locationsForCountry;
+  const producersForLocation = isGuest
+    ? (c: string, l: string) => guestBeanSugg?.producersForLocation(c, l) ?? []
+    : hookBeanSugg.producersForLocation;
+  const makers = isGuest ? (guestGrinderSugg?.makers ?? []) : hookGrinderSugg.makers;
+  const modelsForMaker = isGuest
+    ? (m: string) => guestGrinderSugg?.modelsForMaker(m) ?? []
+    : hookGrinderSugg.modelsForMaker;
 
   const brewDateIso = useMemo(() => {
     try {
@@ -96,7 +172,15 @@ export function NewBrewPage({ user }: Props) {
     }
   }, [brew.brew_date]);
 
+  // -----------------------------------------------------------------------
+  // Data loading
+  // -----------------------------------------------------------------------
+
   async function loadSavedBeans() {
+    if (isGuest) {
+      setSavedBeans(localListBeans() as SavedBeanOption[]);
+      return;
+    }
     const supabase = getSupabaseClient();
     const { data, error: qErr } = await supabase
       .from('beans')
@@ -113,13 +197,21 @@ export function NewBrewPage({ user }: Props) {
       setBeanMsg(e instanceof Error ? e.message : t('common.loadFailed'));
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user.uid]);
+  }, [user.uid, isGuest]);
+
+  // -----------------------------------------------------------------------
+  // Grinder helpers
+  // -----------------------------------------------------------------------
 
   async function getOrCreateGrinderUid(makerRaw: string, modelRaw: string): Promise<string> {
     const maker = makerRaw.trim();
     const model = modelRaw.trim();
     if (!maker || !model) {
       throw new Error(t('grindMap.error.missingGrinder'));
+    }
+
+    if (isGuest) {
+      return localGetOrCreateGrinder(maker, model);
     }
 
     const supabase = getSupabaseClient();
@@ -142,6 +234,10 @@ export function NewBrewPage({ user }: Props) {
     return uid;
   }
 
+  // -----------------------------------------------------------------------
+  // Particle size
+  // -----------------------------------------------------------------------
+
   async function submitParticleSize() {
     setMapMsg(null);
     const setting = grinder.setting.trim();
@@ -157,15 +253,25 @@ export function NewBrewPage({ user }: Props) {
 
     setMapSaving(true);
     try {
-      const supabase = getSupabaseClient();
       const grinder_uid = await getOrCreateGrinderUid(grinder.maker, grinder.model);
-      const { error: insErr } = await supabase.from('grinder_particle_sizes').insert({
-        uid: crypto.randomUUID(),
-        grinder_uid,
-        grinder_setting: setting,
-        particle_median_um: median
-      });
-      if (insErr) throw new Error(insErr.message);
+
+      if (isGuest) {
+        localInsertParticleSize({
+          uid: crypto.randomUUID(),
+          grinder_uid,
+          grinder_setting: setting,
+          particle_median_um: median,
+        });
+      } else {
+        const supabase = getSupabaseClient();
+        const { error: insErr } = await supabase.from('grinder_particle_sizes').insert({
+          uid: crypto.randomUUID(),
+          grinder_uid,
+          grinder_setting: setting,
+          particle_median_um: median
+        });
+        if (insErr) throw new Error(insErr.message);
+      }
       setMapMsg(t('grindMap.saved'));
     } catch (e) {
       setMapMsg(e instanceof Error ? e.message : t('newBrew.error.saveFailed'));
@@ -174,7 +280,12 @@ export function NewBrewPage({ user }: Props) {
     }
   }
 
+  // -----------------------------------------------------------------------
+  // Bean flavor notes sync (Supabase only — local stores inline)
+  // -----------------------------------------------------------------------
+
   async function syncBeanFlavorNotes(beanUid: string, notes: FlavorNote[]) {
+    if (isGuest) return; // Local storage keeps notes inline on the bean row
     const supabase = getSupabaseClient();
     const { error: deleteErr } = await supabase.from('bean_flavor_notes').delete().eq('bean_uid', beanUid);
     if (deleteErr) throw new Error(deleteErr.message);
@@ -205,7 +316,21 @@ export function NewBrewPage({ user }: Props) {
     };
   }
 
+  // -----------------------------------------------------------------------
+  // Resolve bean UID for brew save
+  // -----------------------------------------------------------------------
+
   async function resolveBeanUidForBrew(): Promise<string> {
+    if (isGuest) {
+      if (selectedBeanUid) {
+        localUpdateBean(selectedBeanUid, beanPayload());
+        return selectedBeanUid;
+      }
+      const bean_uid = crypto.randomUUID();
+      localInsertBean({ uid: bean_uid, ...beanPayload() });
+      return bean_uid;
+    }
+
     const supabase = getSupabaseClient();
     if (selectedBeanUid) {
       const { error: updErr } = await supabase.from('beans').update(beanPayload()).eq('uid', selectedBeanUid);
@@ -223,27 +348,44 @@ export function NewBrewPage({ user }: Props) {
     return bean_uid;
   }
 
+  // -----------------------------------------------------------------------
+  // Save bean only
+  // -----------------------------------------------------------------------
+
   async function saveBeanOnly() {
     setBeanMsg(null);
     setBeanSaving(true);
     try {
-      const supabase = getSupabaseClient();
-      let beanUid = selectedBeanUid;
-      if (beanUid) {
-        const { error: updErr } = await supabase.from('beans').update(beanPayload()).eq('uid', beanUid);
-        if (updErr) throw new Error(updErr.message);
+      if (isGuest) {
+        let beanUid = selectedBeanUid;
+        if (beanUid) {
+          localUpdateBean(beanUid, beanPayload());
+        } else {
+          beanUid = crypto.randomUUID();
+          localInsertBean({ uid: beanUid, ...beanPayload() });
+        }
+        await loadSavedBeans();
+        setSelectedBeanUid(beanUid);
+        setBeanMsg(t('newBrew.bean.saved'));
       } else {
-        beanUid = crypto.randomUUID();
-        const { error: insErr } = await supabase.from('beans').insert({
-          uid: beanUid,
-          ...beanPayload()
-        });
-        if (insErr) throw new Error(insErr.message);
+        const supabase = getSupabaseClient();
+        let beanUid = selectedBeanUid;
+        if (beanUid) {
+          const { error: updErr } = await supabase.from('beans').update(beanPayload()).eq('uid', beanUid);
+          if (updErr) throw new Error(updErr.message);
+        } else {
+          beanUid = crypto.randomUUID();
+          const { error: insErr } = await supabase.from('beans').insert({
+            uid: beanUid,
+            ...beanPayload()
+          });
+          if (insErr) throw new Error(insErr.message);
+        }
+        await syncBeanFlavorNotes(beanUid, bean.cup_flavor_notes);
+        await loadSavedBeans();
+        setSelectedBeanUid(beanUid);
+        setBeanMsg(t('newBrew.bean.saved'));
       }
-      await syncBeanFlavorNotes(beanUid, bean.cup_flavor_notes);
-      await loadSavedBeans();
-      setSelectedBeanUid(beanUid);
-      setBeanMsg(t('newBrew.bean.saved'));
     } catch (e) {
       setBeanMsg(e instanceof Error ? e.message : t('newBrew.error.saveFailed'));
     } finally {
@@ -251,25 +393,38 @@ export function NewBrewPage({ user }: Props) {
     }
   }
 
+  // -----------------------------------------------------------------------
+  // Search particle sizes
+  // -----------------------------------------------------------------------
+
   async function searchParticleSizes() {
     setMapMsg(null);
     setSearchRows([]);
     setSearchLoading(true);
     try {
-      const supabase = getSupabaseClient();
       const grinder_uid = await getOrCreateGrinderUid(grinder.maker, grinder.model);
-      const { data, error: qErr } = await supabase
-        .from('grinder_particle_sizes')
-        .select('grinder_setting,particle_median_um')
-        .eq('grinder_uid', grinder_uid);
-      if (qErr) throw new Error(qErr.message);
-      setSearchRows((data ?? []) as Array<{ grinder_setting: string; particle_median_um: number }>);
+
+      if (isGuest) {
+        setSearchRows(localSearchParticleSizes(grinder_uid));
+      } else {
+        const supabase = getSupabaseClient();
+        const { data, error: qErr } = await supabase
+          .from('grinder_particle_sizes')
+          .select('grinder_setting,particle_median_um')
+          .eq('grinder_uid', grinder_uid);
+        if (qErr) throw new Error(qErr.message);
+        setSearchRows((data ?? []) as Array<{ grinder_setting: string; particle_median_um: number }>);
+      }
     } catch (e) {
       setMapMsg(e instanceof Error ? e.message : t('common.loadFailed'));
     } finally {
       setSearchLoading(false);
     }
   }
+
+  // -----------------------------------------------------------------------
+  // Save full brew
+  // -----------------------------------------------------------------------
 
   async function save() {
     setError(null);
@@ -281,8 +436,6 @@ export function NewBrewPage({ user }: Props) {
 
     setSaving(true);
     try {
-      const supabase = getSupabaseClient();
-
       const bean_uid = await resolveBeanUidForBrew();
       const brew_uid = crypto.randomUUID();
 
@@ -293,7 +446,7 @@ export function NewBrewPage({ user }: Props) {
       const water_temp_c =
         waterTempRaw == null ? null : waterTempUnit === 'F' ? Number(fToC(waterTempRaw).toFixed(2)) : waterTempRaw;
 
-      const { error: brewErr } = await supabase.from('brews').insert({
+      const brewRow = {
         uid: brew_uid,
         brew_date: brewDateIso,
         bean_uid,
@@ -310,20 +463,27 @@ export function NewBrewPage({ user }: Props) {
         extraction_note: brew.extraction_note || null,
         taste_note: brew.taste_note || null,
         taste_flavor_notes: (brew.taste_flavor_notes as FlavorNote[]) || []
-      });
-      if (brewErr) throw new Error(brewErr.message);
+      };
 
-      // Insert normalized brew flavor notes for efficient hierarchical filtering
-      if (brew.taste_flavor_notes.length > 0) {
-        const brewNoteRows = brew.taste_flavor_notes.map((n) => ({
-          brew_uid,
-          l1: n.path[0] ?? '',
-          l2: n.path[1] ?? null,
-          l3: n.path[2] ?? null,
-          color: n.color
-        }));
-        const { error: bfnErr } = await supabase.from('brew_flavor_notes').insert(brewNoteRows);
-        if (bfnErr) throw new Error(bfnErr.message);
+      if (isGuest) {
+        localInsertBrew(brewRow);
+      } else {
+        const supabase = getSupabaseClient();
+        const { error: brewErr } = await supabase.from('brews').insert(brewRow);
+        if (brewErr) throw new Error(brewErr.message);
+
+        // Insert normalized brew flavor notes for efficient hierarchical filtering
+        if (brew.taste_flavor_notes.length > 0) {
+          const brewNoteRows = brew.taste_flavor_notes.map((n) => ({
+            brew_uid,
+            l1: n.path[0] ?? '',
+            l2: n.path[1] ?? null,
+            l3: n.path[2] ?? null,
+            color: n.color
+          }));
+          const { error: bfnErr } = await supabase.from('brew_flavor_notes').insert(brewNoteRows);
+          if (bfnErr) throw new Error(bfnErr.message);
+        }
       }
 
       setOk(t('newBrew.saved'));

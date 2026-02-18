@@ -9,9 +9,15 @@ import { useBeanSuggestions } from '../hooks/useBeanSuggestions';
 import { fmtDate } from '../utils/formatting';
 import { beanDisplayLabel } from '../utils/beanLabel';
 import type { BeanInput, BeanRow, FlavorNote } from '../types';
+import {
+  localListBeans,
+  localUpdateBean,
+  localDeleteBean,
+} from '../storage';
 
 type Props = {
   user: AppUser;
+  isGuest?: boolean;
 };
 
 type BeanListRow = Pick<
@@ -45,7 +51,7 @@ function draftFromBean(bean: BeanListRow): BeanInput {
   };
 }
 
-export function BeanHistoryPage({ user }: Props) {
+export function BeanHistoryPage({ user, isGuest = false }: Props) {
   const { t } = useI18n();
   const [rows, setRows] = useState<BeanListRow[]>([]);
   const [selectedUid, setSelectedUid] = useState<string | null>(null);
@@ -57,26 +63,71 @@ export function BeanHistoryPage({ user }: Props) {
   const [editDraft, setEditDraft] = useState<BeanInput | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
 
-  const { roasteries, countries, locationsForCountry, producersForLocation, varietals } = useBeanSuggestions(user.uid);
+  const hookBeanSugg = useBeanSuggestions(isGuest ? undefined : user.uid);
+
+  // Guest mode: derive suggestions from loaded rows
+  const guestSugg = useMemo(() => {
+    if (!isGuest) return null;
+    const unique = (arr: string[]) => Array.from(new Set(arr.filter(Boolean).map(s => s.trim()))).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+    return {
+      roasteries: unique(rows.map(b => b.roastery ?? '')),
+      countries: unique(rows.map(b => b.origin_country ?? '')),
+      varietals: unique(rows.map(b => b.varietal ?? '')),
+      locationsForCountry(country: string) {
+        const lc = country.toLowerCase().trim();
+        if (!lc) return unique(rows.map(b => b.origin_location ?? ''));
+        return unique(rows.filter(b => (b.origin_country ?? '').toLowerCase().trim() === lc).map(b => b.origin_location ?? ''));
+      },
+      producersForLocation(country: string, location: string) {
+        const lcC = country.toLowerCase().trim();
+        const lcL = location.toLowerCase().trim();
+        let filtered = rows;
+        if (lcC) filtered = filtered.filter(b => (b.origin_country ?? '').toLowerCase().trim() === lcC);
+        if (lcL) filtered = filtered.filter(b => (b.origin_location ?? '').toLowerCase().trim() === lcL);
+        return unique(filtered.map(b => b.producer ?? ''));
+      },
+    };
+  }, [isGuest, rows]);
+
+  const roasteries = isGuest ? (guestSugg?.roasteries ?? []) : hookBeanSugg.roasteries;
+  const countries = isGuest ? (guestSugg?.countries ?? []) : hookBeanSugg.countries;
+  const varietals = isGuest ? (guestSugg?.varietals ?? []) : hookBeanSugg.varietals;
+  const locationsForCountry = isGuest
+    ? (c: string) => guestSugg?.locationsForCountry(c) ?? []
+    : hookBeanSugg.locationsForCountry;
+  const producersForLocation = isGuest
+    ? (c: string, l: string) => guestSugg?.producersForLocation(c, l) ?? []
+    : hookBeanSugg.producersForLocation;
 
   const selected = useMemo(() => rows.find((r) => r.uid === selectedUid) ?? null, [rows, selectedUid]);
+
+  // -----------------------------------------------------------------------
+  // Data loading
+  // -----------------------------------------------------------------------
 
   async function refresh() {
     setError(null);
     setLoading(true);
     try {
-      const supabase = getSupabaseClient();
-      const { data, error: qErr } = await supabase
-        .from('beans')
-        .select(
-          'uid,bean_name,roastery,producer,origin_location,origin_country,process,varietal,cup_notes,cup_flavor_notes,roasted_on,created_at'
-        )
-        .order('created_at', { ascending: false });
-      if (qErr) throw new Error(qErr.message);
-      const next = (data ?? []) as BeanListRow[];
-      setRows(next);
-      if (next.length > 0 && !selectedUid) setSelectedUid(next[0].uid);
-      if (next.length === 0) setSelectedUid(null);
+      if (isGuest) {
+        const next = localListBeans() as BeanListRow[];
+        setRows(next);
+        if (next.length > 0 && !selectedUid) setSelectedUid(next[0].uid);
+        if (next.length === 0) setSelectedUid(null);
+      } else {
+        const supabase = getSupabaseClient();
+        const { data, error: qErr } = await supabase
+          .from('beans')
+          .select(
+            'uid,bean_name,roastery,producer,origin_location,origin_country,process,varietal,cup_notes,cup_flavor_notes,roasted_on,created_at'
+          )
+          .order('created_at', { ascending: false });
+        if (qErr) throw new Error(qErr.message);
+        const next = (data ?? []) as BeanListRow[];
+        setRows(next);
+        if (next.length > 0 && !selectedUid) setSelectedUid(next[0].uid);
+        if (next.length === 0) setSelectedUid(null);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : t('common.loadFailed'));
     } finally {
@@ -84,7 +135,12 @@ export function BeanHistoryPage({ user }: Props) {
     }
   }
 
+  // -----------------------------------------------------------------------
+  // Flavor notes sync (Supabase-only — local stores inline)
+  // -----------------------------------------------------------------------
+
   async function syncBeanFlavorNotes(beanUid: string, notes: FlavorNote[]) {
+    if (isGuest) return;
     const supabase = getSupabaseClient();
     const { error: delErr } = await supabase.from('bean_flavor_notes').delete().eq('bean_uid', beanUid);
     if (delErr) throw new Error(delErr.message);
@@ -100,30 +156,40 @@ export function BeanHistoryPage({ user }: Props) {
     if (insErr) throw new Error(insErr.message);
   }
 
+  // -----------------------------------------------------------------------
+  // Save edit
+  // -----------------------------------------------------------------------
+
   async function saveEdit() {
     if (!selected || !editDraft) return;
     setEditError(null);
     setEditSaving(true);
     try {
-      const supabase = getSupabaseClient();
-      const { error: updErr } = await supabase
-        .from('beans')
-        .update({
-          bean_name: editDraft.bean_name.trim() || null,
-          roastery: editDraft.roastery.trim() || null,
-          producer: editDraft.producer.trim() || null,
-          origin_location: editDraft.origin_location.trim() || null,
-          origin_country: editDraft.origin_country.trim() || null,
-          process: editDraft.process.trim() || null,
-          varietal: editDraft.varietal.trim() || null,
-          cup_notes: editDraft.cup_notes.trim() || null,
-          cup_flavor_notes: (editDraft.cup_flavor_notes as FlavorNote[]) || [],
-          roasted_on: editDraft.roasted_on || null
-        })
-        .eq('uid', selected.uid);
-      if (updErr) throw new Error(updErr.message);
+      const patch = {
+        bean_name: editDraft.bean_name.trim() || null,
+        roastery: editDraft.roastery.trim() || null,
+        producer: editDraft.producer.trim() || null,
+        origin_location: editDraft.origin_location.trim() || null,
+        origin_country: editDraft.origin_country.trim() || null,
+        process: editDraft.process.trim() || null,
+        varietal: editDraft.varietal.trim() || null,
+        cup_notes: editDraft.cup_notes.trim() || null,
+        cup_flavor_notes: (editDraft.cup_flavor_notes as FlavorNote[]) || [],
+        roasted_on: editDraft.roasted_on || null
+      };
 
-      await syncBeanFlavorNotes(selected.uid, editDraft.cup_flavor_notes);
+      if (isGuest) {
+        localUpdateBean(selected.uid, patch);
+      } else {
+        const supabase = getSupabaseClient();
+        const { error: updErr } = await supabase
+          .from('beans')
+          .update(patch)
+          .eq('uid', selected.uid);
+        if (updErr) throw new Error(updErr.message);
+        await syncBeanFlavorNotes(selected.uid, editDraft.cup_flavor_notes);
+      }
+
       await refresh();
       setIsEditing(false);
       setEditDraft(null);
@@ -134,14 +200,22 @@ export function BeanHistoryPage({ user }: Props) {
     }
   }
 
+  // -----------------------------------------------------------------------
+  // Delete bean
+  // -----------------------------------------------------------------------
+
   async function deleteSelectedBean() {
     if (!selected) return;
     if (!window.confirm(t('beanHistory.delete.confirm'))) return;
     setDeleteBusy(true);
     try {
-      const supabase = getSupabaseClient();
-      const { error: delErr } = await supabase.from('beans').delete().eq('uid', selected.uid);
-      if (delErr) throw new Error(delErr.message);
+      if (isGuest) {
+        localDeleteBean(selected.uid);
+      } else {
+        const supabase = getSupabaseClient();
+        const { error: delErr } = await supabase.from('beans').delete().eq('uid', selected.uid);
+        if (delErr) throw new Error(delErr.message);
+      }
       setSelectedUid(null);
       await refresh();
     } catch (e) {
@@ -151,16 +225,24 @@ export function BeanHistoryPage({ user }: Props) {
     }
   }
 
+  // -----------------------------------------------------------------------
+  // Effects
+  // -----------------------------------------------------------------------
+
   useEffect(() => {
     void refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user.uid]);
+  }, [user.uid, isGuest]);
 
   useEffect(() => {
     setIsEditing(false);
     setEditDraft(null);
     setEditError(null);
   }, [selectedUid]);
+
+  // -----------------------------------------------------------------------
+  // Render
+  // -----------------------------------------------------------------------
 
   return (
     <div className="space-y-4">
