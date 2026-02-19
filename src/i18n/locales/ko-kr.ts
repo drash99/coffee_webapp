@@ -7,9 +7,19 @@ export const koKR: Record<keyof typeof enUS, string> = {
   'app.title': 'BeanLog',
   'app.tab.analysis': '분석',
   'app.tab.logging': '로깅',
+  'app.tabs.aria': '메인 메뉴',
   'app.lang.english': '영어',
   'app.lang.korean': '한국어',
   'app.langSelector.aria': '언어 선택',
+  'app.tab.settings': '설정',
+
+  // Settings
+  'settings.about.title': '정보',
+  'settings.about.description': 'BeanLog — 스페셜티 커피 브루 저널 및 원두 분석.',
+  'settings.about.version': '버전',
+  'settings.about.build': '빌드',
+  'settings.language.title': '언어',
+  'settings.account.title': '계정',
 
   // Logging: Supabase config
   'logging.supabaseNotConfigured.title': 'Supabase 설정이 필요합니다',
@@ -49,6 +59,7 @@ export const koKR: Record<keyof typeof enUS, string> = {
   'logging.tab.newBrew': '새 브루',
   'logging.tab.history': '히스토리',
   'logging.tab.beans': '원두',
+  'logging.tabs.aria': '브루 메뉴',
 
   // New brew: sections
   'newBrew.bean.title': '원두',
@@ -65,7 +76,7 @@ export const koKR: Record<keyof typeof enUS, string> = {
   'newBrew.error.invalidBrewDate': '유효한 날짜를 입력해주세요.',
 
   // Calibration PDFs
-  'calibration.title': '캘리브레이션 시트',
+  'calibration.title': '캘리브레이션\n시트',
   'calibration.download.letter': '다운로드 (Letter)',
   'calibration.download.a4': '다운로드 (A4)',
   'calibration.note': '100% 스케일(실제 크기)로 인쇄하세요. “페이지에 맞춤”을 사용하지 마세요.',
@@ -213,6 +224,7 @@ export const koKR: Record<keyof typeof enUS, string> = {
   // Guest mode
   'guest.button': '게스트로 계속하기',
   'guest.banner': '게스트 모드 — 데이터가 이 기기에만 저장됩니다.',
+  'guest.banner.ignore': '무시',
   'guest.banner.signup': '회원가입하여 기기 간 동기화',
   'guest.exit': '게스트 모드 나가기',
   'guest.migrate.button': '클라우드로 데이터 이동',
@@ -263,7 +275,7 @@ export const koKR: Record<keyof typeof enUS, string> = {
   'upload.mode.grind': '분쇄',
   'upload.modePlural.bean': '원두',
   'upload.modePlural.grind': '분쇄',
-  'upload.button': '{mode} 이미지 업로드',
+  'upload.button': '{mode} 이미지\n업로드',
   'upload.help': '캘리브레이션 시트에 {modePlural}를 올려주세요',
 
   // Results display

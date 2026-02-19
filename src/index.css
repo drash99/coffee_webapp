@@ -2,3 +2,15 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Fixed top safe-area bar: prevents content from scrolling under iOS notch/status bar */
+.safe-area-top {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: env(safe-area-inset-top, 0);
+  background: rgb(249 250 251); /* gray-50 */
+  z-index: 40;
+  pointer-events: none;
+}
+

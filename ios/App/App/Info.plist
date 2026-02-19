@@ -35,17 +35,18 @@
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
-		<string>UIInterfaceOrientationLandscapeLeft</string>
-		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
 	<key>UISupportedInterfaceOrientations~ipad</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
-		<string>UIInterfaceOrientationPortraitUpsideDown</string>
-		<string>UIInterfaceOrientationLandscapeLeft</string>
-		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>BeanLog needs camera access to photograph beans and grind samples for analysis.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>BeanLog needs photo library access to select images of beans and grind samples for analysis.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>BeanLog can save analysis images to your photo library.</string>
 </dict>
 </plist>

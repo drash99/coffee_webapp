@@ -51,6 +51,7 @@ export function setGuestActive(active: boolean): void {
     localStorage.setItem(KEYS.guestActive, 'true');
   } else {
     localStorage.removeItem(KEYS.guestActive);
+    localStorage.removeItem('beanlog.guest.bannerDismissed');
   }
 }
 

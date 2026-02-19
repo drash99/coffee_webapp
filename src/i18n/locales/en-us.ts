@@ -3,9 +3,19 @@ export const enUS = {
   'app.title': 'BeanLog',
   'app.tab.analysis': 'Analysis',
   'app.tab.logging': 'Logging',
+  'app.tabs.aria': 'Main navigation',
   'app.lang.english': 'English',
   'app.lang.korean': 'Korean',
   'app.langSelector.aria': 'Language',
+  'app.tab.settings': 'Settings',
+
+  // Settings
+  'settings.about.title': 'About',
+  'settings.about.description': 'BeanLog — specialty coffee brew journal and bean analysis.',
+  'settings.about.version': 'Version',
+  'settings.about.build': 'Build',
+  'settings.language.title': 'Language',
+  'settings.account.title': 'Account',
 
   // Logging: Supabase config
   'logging.supabaseNotConfigured.title': 'Supabase not configured',
@@ -45,6 +55,7 @@ export const enUS = {
   'logging.tab.newBrew': 'New brew',
   'logging.tab.history': 'History',
   'logging.tab.beans': 'Beans',
+  'logging.tabs.aria': 'Brew navigation',
 
   // New brew: sections
   'newBrew.bean.title': 'Bean',
@@ -209,6 +220,7 @@ export const enUS = {
   // Guest mode
   'guest.button': 'Continue as guest',
   'guest.banner': 'Guest mode — data stored on this device only.',
+  'guest.banner.ignore': 'Ignore',
   'guest.banner.signup': 'Sign up to sync across devices',
   'guest.exit': 'Exit guest mode',
   'guest.migrate.button': 'Move data to cloud',

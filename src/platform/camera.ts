@@ -18,6 +18,8 @@ export async function pickImageNative(): Promise<File | null> {
   if (!Capacitor.isNativePlatform()) return null;
 
   try {
+    // Request permissions before opening camera/gallery — ensures iOS shows the permission prompt
+    await Camera.requestPermissions();
     const photo = await Camera.getPhoto({
       resultType: CameraResultType.DataUrl,
       source: CameraSource.Prompt, // shows "Camera" / "Gallery" action sheet
