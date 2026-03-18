@@ -91,4 +91,11 @@ export type GrinderParticleSizeRow = {
   created_at?: string;
 };
 
+export type BeanLabelRow = {
+  uid: string;
+  bean_uid: string;
+  grams: number | null;
+  created_at?: string;
+};
+
 

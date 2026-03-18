@@ -11,6 +11,10 @@ import { useGrinderSuggestions } from '../hooks/useGrinderSuggestions';
 import { toNullableNumber, fmtDate, isoToYmd, unique } from '../utils/formatting';
 import { beanDisplayLabel } from '../utils/beanLabel';
 import { downloadBrewAsPng } from '../utils/brewPng';
+import { getGeminiApiKey, getGeminiModelId, getGeminiTempUnit } from '../ai/prefs';
+import { buildAiGuidanceSignature, getCachedBrewGuidance, setCachedBrewGuidance } from '../ai/cache';
+import { serializeBrewForAi, type AiBeanSummary, type AiBrewSummary } from '../ai/serialize';
+import { requestBrewGuidance, type AiGuidance } from '../ai/geminiClient';
 import {
   localListBrewsWithBeans,
   localListBeans,
@@ -23,6 +27,7 @@ import {
 type Props = {
   user: AppUser;
   isGuest?: boolean;
+  beanUidFilter?: string;
 };
 
 type SavedBeanOption = Pick<
@@ -121,8 +126,13 @@ function noteMatchesFilter(brewNote: FlavorNote, filterNote: FlavorNote): boolea
   return fp.every((seg, i) => seg === bp[i]);
 }
 
-export function HistoryPage({ user, isGuest = false }: Props) {
-  const { t } = useI18n();
+function navigate(url: string) {
+  window.history.pushState({}, '', url);
+  window.dispatchEvent(new PopStateEvent('popstate'));
+}
+
+export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
+  const { t, lang } = useI18n();
   const [rows, setRows] = useState<BrewWithBean[]>([]);
   const [savedBeans, setSavedBeans] = useState<SavedBeanOption[]>([]);
   const [loading, setLoading] = useState(false);
@@ -140,6 +150,11 @@ export function HistoryPage({ user, isGuest = false }: Props) {
   const [shareUrl, setShareUrl] = useState<string | null>(null);
   const [savePngBusy, setSavePngBusy] = useState(false);
   const [savePngMsg, setSavePngMsg] = useState<string | null>(null);
+  const [aiGuidance, setAiGuidance] = useState<AiGuidance | null>(null);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
+  const [aiCopiedMsg, setAiCopiedMsg] = useState<string | null>(null);
+  const [aiIsCached, setAiIsCached] = useState(false);
   const [deleteBusy, setDeleteBusy] = useState(false);
 
   // --- Suggestions ---
@@ -208,6 +223,8 @@ export function HistoryPage({ user, isGuest = false }: Props) {
   // --- Apply filters ---
   const filteredRows = useMemo(() => {
     return rows.filter(r => {
+      const uidFilter = (beanUidFilter ?? '').trim();
+      if (uidFilter && r.bean_uid !== uidFilter) return false;
       if (!matchesFilter(r.beans?.roastery, filters.roastery)) return false;
       if (!matchesFilter(r.beans?.origin_country, filters.country)) return false;
       if (!matchesFilter(r.beans?.origin_location, filters.location)) return false;
@@ -236,7 +253,7 @@ export function HistoryPage({ user, isGuest = false }: Props) {
 
       return true;
     });
-  }, [rows, filters]);
+  }, [rows, filters, beanUidFilter]);
 
   const sortedRows = useMemo(() => {
     const next = [...filteredRows];
@@ -328,6 +345,93 @@ export function HistoryPage({ user, isGuest = false }: Props) {
       .order('created_at', { ascending: false });
     if (beanErr) throw new Error(beanErr.message);
     setSavedBeans((data ?? []) as SavedBeanOption[]);
+  }
+
+  function toAiBeanSummary(bean: BrewWithBean['beans'] | null): AiBeanSummary | null {
+    if (!bean) return null;
+    return {
+      uid: bean.uid,
+      bean_name: bean.bean_name,
+      roastery: bean.roastery,
+      producer: bean.producer,
+      origin_location: bean.origin_location,
+      origin_country: bean.origin_country,
+      process: bean.process,
+      varietal: bean.varietal,
+      roasted_on: bean.roasted_on,
+      cup_flavor_notes: (bean.cup_flavor_notes ?? []) as FlavorNote[] | null,
+    };
+  }
+
+  function toAiBrewSummary(row: BrewWithBean): AiBrewSummary & { bean: AiBeanSummary | null } {
+    return {
+      uid: row.uid,
+      brew_date: row.brew_date,
+      bean_uid: row.bean_uid,
+      grinder: {
+        maker: row.grinders?.maker ?? null,
+        model: row.grinders?.model ?? null,
+        setting: row.grinder_setting ?? null,
+      },
+      recipe: row.recipe,
+      coffee_dose_g: row.coffee_dose_g,
+      coffee_yield_g: row.coffee_yield_g,
+      coffee_tds: row.coffee_tds,
+      water: row.water,
+      water_temp_c: row.water_temp_c,
+      grind_median_um: row.grind_median_um,
+      rating: row.rating,
+      extraction_note: row.extraction_note,
+      taste_note: row.taste_note,
+      taste_flavor_notes: (row.taste_flavor_notes ?? []) as FlavorNote[] | null,
+      bean: toAiBeanSummary(row.beans),
+    };
+  }
+
+  function buildAiRequestContext(row: BrewWithBean) {
+    const current = toAiBrewSummary(row);
+    const sameBean = rows
+      .filter((r) => r.bean_uid === row.bean_uid && r.uid !== row.uid)
+      .sort((a, b) => new Date(b.brew_date).getTime() - new Date(a.brew_date).getTime())
+      .slice(0, 8)
+      .map(toAiBrewSummary);
+    const prefs = {
+      language: lang,
+      tempUnit: getGeminiTempUnit(),
+    };
+    const payload = serializeBrewForAi(current, sameBean, prefs);
+    const modelId = getGeminiModelId();
+    const signature = buildAiGuidanceSignature(modelId, payload);
+    return { modelId, payload, signature };
+  }
+
+  async function requestAiForSelected() {
+    if (!selected) return;
+    setAiError(null);
+    setAiGuidance(null);
+    setAiCopiedMsg(null);
+    setAiIsCached(false);
+    const apiKey = getGeminiApiKey();
+    if (!apiKey) {
+      setAiError(t('history.ai.noKey'));
+      return;
+    }
+    setAiLoading(true);
+    try {
+      const { modelId, payload, signature } = buildAiRequestContext(selected);
+      const guidance = await requestBrewGuidance(apiKey, modelId, payload);
+      setCachedBrewGuidance(selected.uid, signature, guidance);
+      setAiGuidance(guidance);
+      setAiIsCached(false);
+    } catch (e) {
+      setAiError(
+        t('history.ai.error', {
+          message: e instanceof Error ? e.message : 'Unknown error',
+        }),
+      );
+    } finally {
+      setAiLoading(false);
+    }
   }
 
   async function getOrCreateGrinderUid(makerRaw: string, modelRaw: string): Promise<string> {
@@ -596,7 +700,23 @@ export function HistoryPage({ user, isGuest = false }: Props) {
     setShareMsg(null);
     setShareUrl(null);
     setSavePngMsg(null);
+    setAiError(null);
+    setAiGuidance(null);
+    setAiCopiedMsg(null);
+    setAiIsCached(false);
   }, [selectedUid]);
+
+  useEffect(() => {
+    if (!selected) {
+      setAiGuidance(null);
+      setAiIsCached(false);
+      return;
+    }
+    const { signature } = buildAiRequestContext(selected);
+    const cached = getCachedBrewGuidance(selected.uid, signature);
+    setAiGuidance(cached);
+    setAiIsCached(Boolean(cached));
+  }, [selected, rows, lang]);
 
   // -----------------------------------------------------------------------
   // Render
@@ -785,7 +905,19 @@ export function HistoryPage({ user, isGuest = false }: Props) {
         </div>
 
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-          <div className="px-4 py-3 border-b bg-gray-50 text-sm font-medium text-gray-700">{t('history.detail.title')}</div>
+          <div className="px-4 py-3 border-b bg-gray-50 text-sm font-medium text-gray-700 flex items-center justify-between gap-3">
+            <span>{t('history.detail.title')}</span>
+            {selected && !isEditing && (
+              <button
+                type="button"
+                className="px-3 py-1.5 rounded-lg border bg-white text-xs hover:bg-gray-50 disabled:bg-gray-100 whitespace-nowrap"
+                onClick={() => void requestAiForSelected()}
+                disabled={aiLoading}
+              >
+                {aiLoading ? t('history.ai.loading') : t('history.ai.button')}
+              </button>
+            )}
+          </div>
           {!selected ? (
             <div className="p-4 text-sm text-gray-500">{t('history.selectPrompt')}</div>
           ) : (
@@ -811,6 +943,17 @@ export function HistoryPage({ user, isGuest = false }: Props) {
                       disabled={savePngBusy}
                     >
                       {savePngBusy ? t('history.savePng.saving') : t('history.savePng.button')}
+                    </button>
+                    <button
+                      type="button"
+                      className="px-3 py-2 rounded-lg border bg-white text-sm hover:bg-gray-50 whitespace-nowrap"
+                      onClick={() =>
+                        navigate(
+                          `/?bean=${encodeURIComponent(selected.bean_uid)}&duplicateBrew=${encodeURIComponent(selected.uid)}`,
+                        )
+                      }
+                    >
+                      {t('history.duplicate.button')}
                     </button>
                     <button
                       type="button"
@@ -866,6 +1009,112 @@ export function HistoryPage({ user, isGuest = false }: Props) {
               {shareUrl && !isEditing && (
                 <div className="text-xs text-gray-700 bg-gray-50 border border-gray-200 rounded-lg p-2 break-all">
                   {t('history.share.linkLabel')}: {shareUrl}
+                </div>
+              )}
+
+              {!isEditing && (aiError || aiGuidance) && (
+                <div className="mt-3 space-y-2 border-t border-gray-100 pt-3">
+                  {aiError && (
+                    <div className="text-xs text-red-700 bg-red-50 border border-red-100 rounded-lg p-2">{aiError}</div>
+                  )}
+                  {aiGuidance && (
+                    <div className="space-y-2">
+                      {aiIsCached && (
+                        <div className="text-[11px] text-gray-500">
+                          {t('history.ai.cached')}
+                        </div>
+                      )}
+                      {aiGuidance.summary && (
+                        <div>
+                          <div className="text-xs font-semibold text-gray-700">{t('history.ai.summary')}</div>
+                          <div className="text-xs text-gray-800 whitespace-pre-wrap">{aiGuidance.summary}</div>
+                        </div>
+                      )}
+                      {aiGuidance.diagnosis && (
+                        <div>
+                          <div className="text-xs font-semibold text-gray-700">{t('history.ai.diagnosis')}</div>
+                          <div className="text-xs text-gray-800 whitespace-pre-wrap">{aiGuidance.diagnosis}</div>
+                        </div>
+                      )}
+                      {aiGuidance.suggestions.length > 0 && (
+                        <div>
+                          <div className="text-xs font-semibold text-gray-700">{t('history.ai.suggestions')}</div>
+                          <ul className="list-disc pl-4 space-y-1">
+                            {aiGuidance.suggestions.map((s, idx) => (
+                              <li key={`${s.title}-${idx}`} className="text-xs text-gray-800">
+                                <span className="font-semibold">{s.title}</span>
+                                {s.details && <span className="ml-1">{s.details}</span>}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                      {aiGuidance.targets && (aiGuidance.targets.ratio || aiGuidance.targets.water_temp || aiGuidance.targets.brew_time) && (
+                        <div>
+                          <div className="text-xs font-semibold text-gray-700">{t('history.ai.targets')}</div>
+                          <div className="text-xs text-gray-800 space-y-0.5">
+                            {aiGuidance.targets.ratio && (
+                              <div>
+                                {t('history.ai.targets.ratio')}: {aiGuidance.targets.ratio}
+                              </div>
+                            )}
+                            {aiGuidance.targets.water_temp && (
+                              <div>
+                                {t('history.ai.targets.waterTemp')}: {aiGuidance.targets.water_temp}
+                              </div>
+                            )}
+                            {aiGuidance.targets.brew_time && (
+                              <div>
+                                {t('history.ai.targets.brewTime')}: {aiGuidance.targets.brew_time}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <button
+                          type="button"
+                          className="px-3 py-1.5 rounded-lg border bg-white text-xs hover:bg-gray-50 whitespace-nowrap"
+                          onClick={async () => {
+                            if (!aiGuidance) return;
+                            const parts: string[] = [];
+                            if (aiGuidance.summary) parts.push(`${t('history.ai.summary')}: ${aiGuidance.summary}`);
+                            if (aiGuidance.diagnosis) parts.push(`${t('history.ai.diagnosis')}: ${aiGuidance.diagnosis}`);
+                            if (aiGuidance.suggestions.length > 0) {
+                              parts.push(
+                                `${t('history.ai.suggestions')}:\n` +
+                                  aiGuidance.suggestions
+                                    .map((s, idx) => `${idx + 1}. ${s.title}${s.details ? ` — ${s.details}` : ''}`)
+                                    .join('\n'),
+                              );
+                            }
+                            if (aiGuidance.targets && (aiGuidance.targets.ratio || aiGuidance.targets.water_temp || aiGuidance.targets.brew_time)) {
+                              const tLines: string[] = [];
+                              if (aiGuidance.targets.ratio) {
+                                tLines.push(`${t('history.ai.targets.ratio')}: ${aiGuidance.targets.ratio}`);
+                              }
+                              if (aiGuidance.targets.water_temp) {
+                                tLines.push(`${t('history.ai.targets.waterTemp')}: ${aiGuidance.targets.water_temp}`);
+                              }
+                              if (aiGuidance.targets.brew_time) {
+                                tLines.push(`${t('history.ai.targets.brewTime')}: ${aiGuidance.targets.brew_time}`);
+                              }
+                              parts.push(`${t('history.ai.targets')}:\n${tLines.join('\n')}`);
+                            }
+                            try {
+                              await navigator.clipboard.writeText(parts.join('\n\n'));
+                              setAiCopiedMsg(t('history.ai.copied'));
+                            } catch {
+                              // ignore
+                            }
+                          }}
+                        >
+                          {t('history.ai.copy')}
+                        </button>
+                        {aiCopiedMsg && <span className="text-[11px] text-gray-500">{aiCopiedMsg}</span>}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 

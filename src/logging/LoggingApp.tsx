@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Coffee, History, PlusCircle } from 'lucide-react';
 import { isSupabaseConfigured } from '../config/supabase';
 import type { AppUser } from '../auth/types';
@@ -20,12 +20,28 @@ type Props = {
   onAuthSuccess: (u: AppUser) => void;
   onExitGuest: () => void;
   onEnterGuest: () => void;
+  initialLogTab?: LogTab;
+  initialBeanUid?: string;
+  initialHistoryBeanUid?: string;
+  initialDuplicateBrewUid?: string;
+  initialDoseG?: string;
 };
 
-export function LoggingApp({ user, isGuest, onAuthSuccess, onExitGuest, onEnterGuest }: Props) {
+export function LoggingApp({
+  user,
+  isGuest,
+  onAuthSuccess,
+  onExitGuest,
+  onEnterGuest,
+  initialLogTab,
+  initialBeanUid,
+  initialHistoryBeanUid,
+  initialDuplicateBrewUid,
+  initialDoseG,
+}: Props) {
   const { t } = useI18n();
   const [authTab, setAuthTab] = useState<AuthTab>('login');
-  const [logTab, setLogTab] = useState<LogTab>('new');
+  const [logTab, setLogTab] = useState<LogTab>(initialLogTab ?? 'new');
   const [bannerDismissed, setBannerDismissed] = useState(() => {
     try {
       return localStorage.getItem('beanlog.guest.bannerDismissed') === 'true';
@@ -40,6 +56,12 @@ export function LoggingApp({ user, isGuest, onAuthSuccess, onExitGuest, onEnterG
     } catch {}
     setBannerDismissed(true);
   }
+  const native = isNative();
+
+  // Deep-link: allow App.tsx to request a tab selection.
+  useEffect(() => {
+    if (initialLogTab) setLogTab(initialLogTab);
+  }, [initialLogTab]);
 
   // -----------------------------------------------------------------------
   // Render: Supabase not configured — offer guest mode
@@ -118,8 +140,6 @@ export function LoggingApp({ user, isGuest, onAuthSuccess, onExitGuest, onEnterG
   // Render: Authenticated OR Guest — main app with New Brew | History | Beans
   // -----------------------------------------------------------------------
 
-  const native = isNative();
-
   return (
     <div className={`max-w-4xl mx-auto space-y-4 ${native ? 'pb-[calc(4rem+env(safe-area-inset-bottom))]' : ''}`}>
       {/* Guest mode banner */}
@@ -172,8 +192,17 @@ export function LoggingApp({ user, isGuest, onAuthSuccess, onExitGuest, onEnterG
         </div>
       )}
 
-      {logTab === 'new' && <NewBrewPage user={user} isGuest={isGuest} />}
-      {logTab === 'history' && <HistoryPage user={user} isGuest={isGuest} />}
+      {logTab === 'new' && (
+        <NewBrewPage
+          key={[initialBeanUid ?? '', initialDuplicateBrewUid ?? '', initialDoseG ?? ''].join('|')}
+          user={user}
+          isGuest={isGuest}
+          initialBeanUid={initialBeanUid}
+          initialDuplicateBrewUid={initialDuplicateBrewUid}
+          initialDoseG={initialDoseG}
+        />
+      )}
+      {logTab === 'history' && <HistoryPage user={user} isGuest={isGuest} beanUidFilter={initialHistoryBeanUid} />}
       {logTab === 'beans' && <BeanHistoryPage user={user} isGuest={isGuest} />}
 
       {native && (

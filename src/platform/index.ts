@@ -12,4 +12,5 @@ export { getPlatform, isNative } from './platform';
 export type { Platform } from './platform';
 export { pickImageNative, hasNativeCamera } from './camera';
 export { hapticTap, hapticImpact } from './haptics';
-
+export { canPrintBrotherLabels, printBrotherLabels } from './brotherPrinter';
+export type { BrotherPrintLabel } from './brotherPrinter';

@@ -44,9 +44,17 @@
 	<true/>
 	<key>NSCameraUsageDescription</key>
 	<string>BeanLog needs camera access to photograph beans and grind samples for analysis.</string>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>BeanLog uses Bluetooth to connect to your Brother label printer.</string>
+	<key>NSBluetoothPeripheralUsageDescription</key>
+	<string>BeanLog uses Bluetooth to connect to your Brother label printer.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>BeanLog needs photo library access to select images of beans and grind samples for analysis.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>BeanLog can save analysis images to your photo library.</string>
+	<key>UISupportedExternalAccessoryProtocols</key>
+	<array>
+		<string>com.issc.datapath</string>
+	</array>
 </dict>
 </plist>

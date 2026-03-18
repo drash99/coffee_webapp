@@ -6,6 +6,7 @@ import { TabButton } from './logging/components/TabButton';
 import { useI18n } from './i18n/I18nProvider';
 import { SharedBrewPage } from './logging/pages/SharedBrewPage';
 import { SettingsPage } from './logging/pages/SettingsPage';
+import { BeanLabelInfoPage } from './logging/pages/BeanLabelInfoPage';
 import { isNative } from './platform';
 import { isSupabaseConfigured } from './config/supabase';
 import type { AppUser } from './auth/types';
@@ -26,12 +27,43 @@ function parseSharedTokenFromLocation(loc: Location): string | null {
   return m?.[1] ?? null;
 }
 
+function parseLabelUidFromLocation(loc: Location): string | null {
+  const m = loc.pathname.match(/^\/label\/([^/]+)\/?$/);
+  return m?.[1] ?? null;
+}
+
+function parseDeepLinkParams(loc: Location): {
+  beanUid: string | null;
+  historyBeanUid: string | null;
+  duplicateBrewUid: string | null;
+  doseG: string | null;
+} {
+  const q = new URLSearchParams(loc.search);
+  const beanUid = (q.get('bean') ?? '').trim() || null;
+  const historyBeanUid = (q.get('historyBean') ?? '').trim() || null;
+  const duplicateBrewUid = (q.get('duplicateBrew') ?? '').trim() || null;
+  const doseG = (q.get('doseG') ?? '').trim() || null;
+  return { beanUid, historyBeanUid, duplicateBrewUid, doseG };
+}
+
 function App() {
   const [tab, setTab] = useState<'analysis' | 'logging' | 'settings'>('logging');
   const { lang, setLang, t } = useI18n();
   const [user, setUser] = useState<AppUser | null>(null);
   const [isGuest, setIsGuest] = useState(false);
   const [sharedToken, setSharedToken] = useState<string | null>(() => parseSharedTokenFromLocation(window.location));
+  const [labelUid, setLabelUid] = useState<string | null>(() => parseLabelUidFromLocation(window.location));
+  const [
+    {
+      beanUid: deepBeanUid,
+      historyBeanUid: deepHistoryBeanUid,
+      duplicateBrewUid: deepDuplicateBrewUid,
+      doseG: deepDoseG,
+    },
+    setDeepLink,
+  ] = useState(() =>
+    parseDeepLinkParams(window.location),
+  );
 
   // Auth bootstrap
   useEffect(() => {
@@ -84,12 +116,20 @@ function App() {
   useEffect(() => {
     function onPopState() {
       setSharedToken(parseSharedTokenFromLocation(window.location));
+      setLabelUid(parseLabelUidFromLocation(window.location));
+      setDeepLink(parseDeepLinkParams(window.location));
     }
     window.addEventListener('popstate', onPopState);
     return () => {
       window.removeEventListener('popstate', onPopState);
     };
   }, []);
+
+  useEffect(() => {
+    if (deepBeanUid || deepHistoryBeanUid || deepDuplicateBrewUid || deepDoseG) {
+      setTab('logging');
+    }
+  }, [deepBeanUid, deepHistoryBeanUid, deepDuplicateBrewUid, deepDoseG]);
 
   function enterGuestMode() {
     setGuestActive(true);
@@ -111,7 +151,7 @@ function App() {
   }
 
   const native = isNative();
-  const showTabs = !sharedToken;
+  const showTabs = !sharedToken && !labelUid;
 
   return (
     <div
@@ -125,7 +165,7 @@ function App() {
       <header className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6 max-w-5xl mx-auto">
         <h1 className="text-2xl font-bold flex items-center gap-2 whitespace-nowrap">
           <Coffee className="w-8 h-8 text-amber-700" />
-          {sharedToken ? t('sharedBrew.title') : t('app.title')}
+          {sharedToken ? t('sharedBrew.title') : labelUid ? t('beanLabelInfo.title') : t('app.title')}
         </h1>
         {showTabs && !native && (
           <div className="flex items-center gap-2 flex-wrap">
@@ -156,6 +196,8 @@ function App() {
       >
         {sharedToken ? (
           <SharedBrewPage token={sharedToken} />
+        ) : labelUid ? (
+          <BeanLabelInfoPage labelUid={labelUid} viewerUser={user} isGuest={isGuest} />
         ) : tab === 'analysis' ? (
           <AnalysisApp />
         ) : tab === 'settings' ? (
@@ -179,6 +221,11 @@ function App() {
             onAuthSuccess={handleAuthSuccess}
             onExitGuest={exitGuestMode}
             onEnterGuest={enterGuestMode}
+            initialLogTab={deepHistoryBeanUid ? 'history' : deepBeanUid || deepDuplicateBrewUid || deepDoseG ? 'new' : undefined}
+            initialBeanUid={deepBeanUid ?? undefined}
+            initialHistoryBeanUid={deepHistoryBeanUid ?? undefined}
+            initialDuplicateBrewUid={deepDuplicateBrewUid ?? undefined}
+            initialDoseG={deepDoseG ?? undefined}
           />
         )}
       </main>

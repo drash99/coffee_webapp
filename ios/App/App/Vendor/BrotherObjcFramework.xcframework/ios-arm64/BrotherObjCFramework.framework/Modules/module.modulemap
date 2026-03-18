@@ -1,0 +1,6 @@
+framework module BrotherObjCFramework {
+  umbrella header "BrotherObjCFramework.h"
+  export *
+
+  module * { export * }
+}

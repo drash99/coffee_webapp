@@ -22,10 +22,16 @@ export {
   localListBrewsWithBeans,
   // Migration
   localGetAllData,
+  localBuildBackupPayload,
+  localRestoreFromBackup,
   localClearAll,
   localHasData,
+  // Bean labels
+  localInsertBeanLabels,
+  localGetBeanLabel,
+  localListBeanLabelsForBean,
+  localClearBeanLabels,
   migrateLocalToSupabase,
 } from './localDb';
 
 export type { LocalBrewWithBean } from './localDb';
-

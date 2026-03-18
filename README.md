@@ -86,6 +86,11 @@ The app has a separate **Logging** tab (next to **Analysis**) to record brews an
   - Junction tables with `l1`/`l2`/`l3` columns mapping to SCA Flavor Wheel hierarchy levels
   - Enables efficient server-side hierarchical queries (e.g. `WHERE l1 = 'Sweet'`)
   - Written alongside the existing jsonb columns on save; jsonb still used for display
+- **Bean QR labels**:
+  - Per-label UUIDs for printed bean labels
+  - Public label lookup page at `/label/<label_uid>`
+  - Public RPC for external integrations such as inventory scanners
+  - External integration guide: [`docs/bean-qr-integration.md`](docs/bean-qr-integration.md)
 
 ### Supabase setup
 1. Create a Supabase project.

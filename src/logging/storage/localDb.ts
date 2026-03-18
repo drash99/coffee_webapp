@@ -6,7 +6,7 @@
  * so switching between guest / authenticated is straightforward.
  */
 
-import type { BeanRow, BrewRow, FlavorNote, GrinderRow, GrinderParticleSizeRow } from '../types';
+import type { BeanLabelRow, BeanRow, BrewRow, FlavorNote, GrinderRow, GrinderParticleSizeRow } from '../types';
 
 // ---------------------------------------------------------------------------
 // Storage keys
@@ -17,6 +17,7 @@ const KEYS = {
   brews: 'beanlog.local.brews',
   grinders: 'beanlog.local.grinders',
   particleSizes: 'beanlog.local.particle_sizes',
+  beanLabels: 'beanlog.local.bean_labels',
   guestActive: 'beanlog.guest.active',
 } as const;
 
@@ -179,6 +180,7 @@ export type LocalBrewWithBean = BrewRow & {
     | 'origin_country'
     | 'process'
     | 'varietal'
+    | 'cup_notes'
     | 'roasted_on'
     | 'cup_flavor_notes'
   > | null;
@@ -207,6 +209,7 @@ export function localListBrewsWithBeans(): LocalBrewWithBean[] {
             origin_country: bean.origin_country,
             process: bean.process,
             varietal: bean.varietal,
+            cup_notes: bean.cup_notes,
             roasted_on: bean.roasted_on,
             cup_flavor_notes: bean.cup_flavor_notes,
           }
@@ -233,6 +236,7 @@ export function localGetAllData() {
     brews: getAll<BrewRow>(KEYS.brews),
     grinders: getAll<GrinderRow>(KEYS.grinders),
     particleSizes: getAll<GrinderParticleSizeRow>(KEYS.particleSizes),
+    beanLabels: getAll<BeanLabelRow>(KEYS.beanLabels),
   };
 }
 
@@ -242,11 +246,94 @@ export function localClearAll(): void {
   localStorage.removeItem(KEYS.brews);
   localStorage.removeItem(KEYS.grinders);
   localStorage.removeItem(KEYS.particleSizes);
+  localStorage.removeItem(KEYS.beanLabels);
 }
 
 /** Quick check whether the guest has any stored records. */
 export function localHasData(): boolean {
-  return getAll<BeanRow>(KEYS.beans).length > 0 || getAll<BrewRow>(KEYS.brews).length > 0;
+  return (
+    getAll<BeanRow>(KEYS.beans).length > 0 ||
+    getAll<BrewRow>(KEYS.brews).length > 0 ||
+    getAll<BeanLabelRow>(KEYS.beanLabels).length > 0
+  );
+}
+
+export type LocalBackupPayload = {
+  version: 1;
+  exported_at: string;
+  data: ReturnType<typeof localGetAllData>;
+};
+
+export function localBuildBackupPayload(): LocalBackupPayload {
+  return {
+    version: 1,
+    exported_at: new Date().toISOString(),
+    data: localGetAllData(),
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function coerceArray<T>(value: unknown): T[] {
+  return Array.isArray(value) ? (value as T[]) : [];
+}
+
+export function localRestoreFromBackup(payload: unknown): ReturnType<typeof localGetAllData> {
+  if (!isRecord(payload)) {
+    throw new Error('Invalid backup file.');
+  }
+
+  const rawData =
+    isRecord(payload.data) && Number(payload.version) === 1
+      ? payload.data
+      : payload;
+
+  if (!isRecord(rawData)) {
+    throw new Error('Invalid backup file.');
+  }
+
+  const restored = {
+    beans: coerceArray<BeanRow>(rawData.beans),
+    brews: coerceArray<BrewRow>(rawData.brews),
+    grinders: coerceArray<GrinderRow>(rawData.grinders),
+    particleSizes: coerceArray<GrinderParticleSizeRow>(rawData.particleSizes),
+    beanLabels: coerceArray<BeanLabelRow>(rawData.beanLabels),
+  };
+
+  setAll(KEYS.beans, restored.beans);
+  setAll(KEYS.brews, restored.brews);
+  setAll(KEYS.grinders, restored.grinders);
+  setAll(KEYS.particleSizes, restored.particleSizes);
+  setAll(KEYS.beanLabels, restored.beanLabels);
+
+  return restored;
+}
+
+// ---------------------------------------------------------------------------
+// Bean labels (guest-only persistence)
+// ---------------------------------------------------------------------------
+
+export function localInsertBeanLabels(labels: Omit<BeanLabelRow, 'created_at'>[]): void {
+  const all = getAll<BeanLabelRow>(KEYS.beanLabels);
+  const now = new Date().toISOString();
+  for (const l of labels) all.push({ ...l, created_at: now });
+  setAll(KEYS.beanLabels, all);
+}
+
+export function localGetBeanLabel(uid: string): BeanLabelRow | null {
+  return getAll<BeanLabelRow>(KEYS.beanLabels).find((l) => l.uid === uid) ?? null;
+}
+
+export function localListBeanLabelsForBean(beanUid: string): BeanLabelRow[] {
+  return getAll<BeanLabelRow>(KEYS.beanLabels)
+    .filter((l) => l.bean_uid === beanUid)
+    .sort((a, b) => new Date(b.created_at ?? '').getTime() - new Date(a.created_at ?? '').getTime());
+}
+
+export function localClearBeanLabels(): void {
+  localStorage.removeItem(KEYS.beanLabels);
 }
 
 // ---------------------------------------------------------------------------
@@ -259,7 +346,7 @@ export function localHasData(): boolean {
  * `user_uid` from `auth.uid()`, so we omit it from the inserts.
  *
  * Insert order respects FK constraints:
- *   grinders → beans → brews → particle_sizes
+ *   grinders → beans → brews → bean_labels → particle_sizes
  */
 export async function migrateLocalToSupabase(): Promise<{ beans: number; brews: number }> {
   // Dynamic import to avoid pulling Supabase into the guest‑only bundle path
@@ -345,7 +432,18 @@ export async function migrateLocalToSupabase(): Promise<{ beans: number; brews: 
     }
   }
 
-  // 4. Particle sizes
+  // 4. Bean labels
+  if (data.beanLabels.length > 0) {
+    const labelRows = data.beanLabels.map((label) => ({
+      uid: label.uid,
+      bean_uid: label.bean_uid,
+      grams: label.grams,
+    }));
+    const { error } = await supabase.from('bean_labels').insert(labelRows);
+    if (error) throw new Error(`Bean labels: ${error.message}`);
+  }
+
+  // 5. Particle sizes
   if (data.particleSizes.length > 0) {
     const psRows = data.particleSizes.map((ps) => ({
       uid: ps.uid,
@@ -361,4 +459,3 @@ export async function migrateLocalToSupabase(): Promise<{ beans: number; brews: 
   localClearAll();
   return counts;
 }
-

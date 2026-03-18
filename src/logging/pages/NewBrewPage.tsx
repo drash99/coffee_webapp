@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { AppUser } from '../../auth/types';
 import { getSupabaseClient } from '../../config/supabase';
 import { FlavorWheelPicker } from '../components/FlavorWheelPicker';
@@ -6,7 +6,7 @@ import { StarRating } from '../components/StarRating';
 import { AutocompleteInput } from '../components/AutocompleteInput';
 import { useGrinderSuggestions } from '../hooks/useGrinderSuggestions';
 import { useBeanSuggestions } from '../hooks/useBeanSuggestions';
-import { toNullableNumber, todayYMD, fToC } from '../utils/formatting';
+import { toNullableNumber, todayYMD, fToC, fmtDate } from '../utils/formatting';
 import { unique } from '../utils/formatting';
 import { beanDisplayLabel } from '../utils/beanLabel';
 import type { BeanInput, BrewInput, FlavorNote, GrinderInput } from '../types';
@@ -20,11 +20,15 @@ import {
   localInsertParticleSize,
   localSearchParticleSizes,
   localListGrinders,
+  localListBrewsWithBeans,
 } from '../storage';
 
 type Props = {
   user: AppUser;
   isGuest?: boolean;
+  initialBeanUid?: string;
+  initialDuplicateBrewUid?: string;
+  initialDoseG?: string;
 };
 
 type SavedBeanOption = {
@@ -41,6 +45,30 @@ type SavedBeanOption = {
   roasted_on: string | null;
 };
 
+type BrewTemplateRow = {
+  uid: string;
+  bean_uid: string;
+  brew_date: string;
+  recipe: string | null;
+  coffee_dose_g: number | null;
+  coffee_yield_g: number | null;
+  coffee_tds: number | null;
+  water: string | null;
+  water_temp_c: number | null;
+  grind_median_um: number | null;
+  rating: number | null;
+  grinder_setting: string | null;
+  extraction_note: string | null;
+  taste_note: string | null;
+  taste_flavor_notes: FlavorNote[] | null;
+  beans: SavedBeanOption | null;
+  grinders: {
+    uid: string;
+    maker: string | null;
+    model: string | null;
+  } | null;
+};
+
 
 const emptyBean: BeanInput = {
   bean_name: '',
@@ -55,7 +83,13 @@ const emptyBean: BeanInput = {
   roasted_on: ''
 };
 
-export function NewBrewPage({ user, isGuest = false }: Props) {
+export function NewBrewPage({
+  user,
+  isGuest = false,
+  initialBeanUid,
+  initialDuplicateBrewUid,
+  initialDoseG,
+}: Props) {
   const { t } = useI18n();
   const [bean, setBean] = useState<BeanInput>(emptyBean);
   const [savedBeans, setSavedBeans] = useState<SavedBeanOption[]>([]);
@@ -96,10 +130,71 @@ export function NewBrewPage({ user, isGuest = false }: Props) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
+  const [presetMsg, setPresetMsg] = useState<string | null>(null);
+  const [recentBeanBrew, setRecentBeanBrew] = useState<BrewTemplateRow | null>(null);
+  const [recentBrewLoading, setRecentBrewLoading] = useState(false);
+  const appliedInitialBeanUidRef = useRef<string | null>(null);
+  const appliedInitialDoseRef = useRef<string | null>(null);
+  const appliedDuplicateBrewUidRef = useRef<string | null>(null);
 
   // --- Suggestions: hooks for Supabase, inline derivation for guest ---
   const hookBeanSugg = useBeanSuggestions(isGuest ? undefined : user.uid);
   const hookGrinderSugg = useGrinderSuggestions(isGuest ? undefined : user.uid);
+
+  function applySavedBeanDetails(source: SavedBeanOption) {
+    setSelectedBeanUid(source.uid);
+    setBean({
+      bean_name: source.bean_name ?? '',
+      roastery: source.roastery ?? '',
+      producer: source.producer ?? '',
+      origin_location: source.origin_location ?? '',
+      origin_country: source.origin_country ?? '',
+      process: source.process ?? '',
+      varietal: source.varietal ?? '',
+      cup_notes: source.cup_notes ?? '',
+      cup_flavor_notes: (source.cup_flavor_notes ?? []) as FlavorNote[],
+      roasted_on: source.roasted_on ?? '',
+    });
+  }
+
+  function grinderLabelForPreset(row: BrewTemplateRow): string {
+    return `${row.grinders?.maker || t('common.none')}${row.grinders?.model ? ` ${row.grinders.model}` : ''}${row.grinder_setting ? ` · ${row.grinder_setting}` : ''}`;
+  }
+
+  function applyBrewTemplate(
+    row: BrewTemplateRow,
+    options: {
+      message: string;
+      overrideDoseG?: string | null;
+    },
+  ) {
+    if (row.beans) {
+      applySavedBeanDetails(row.beans);
+    } else {
+      setSelectedBeanUid(row.bean_uid);
+    }
+    setGrinder({
+      maker: row.grinders?.maker ?? '',
+      model: row.grinders?.model ?? '',
+      setting: row.grinder_setting ?? '',
+    });
+    setWaterTempUnit('C');
+    setBrew({
+      brew_date: todayYMD(),
+      recipe: row.recipe ?? '',
+      coffee_dose_g: options.overrideDoseG ?? (row.coffee_dose_g == null ? '' : String(row.coffee_dose_g)),
+      coffee_yield_g: row.coffee_yield_g == null ? '' : String(row.coffee_yield_g),
+      coffee_tds: row.coffee_tds == null ? '' : String(row.coffee_tds),
+      water: row.water ?? '',
+      water_temp: row.water_temp_c == null ? '' : String(row.water_temp_c),
+      grind_median_um: row.grind_median_um == null ? '' : String(row.grind_median_um),
+      rating: row.rating == null ? 0 : Number(row.rating),
+      extraction_note: row.extraction_note ?? '',
+      taste_note: row.taste_note ?? '',
+      taste_flavor_notes: (row.taste_flavor_notes ?? []) as FlavorNote[],
+    });
+    setPresetMsg(options.message);
+  }
 
   // Guest mode: derive suggestions from locally loaded data
   const guestBeanSugg = useMemo(() => {
@@ -192,12 +287,152 @@ export function NewBrewPage({ user, isGuest = false }: Props) {
     setSavedBeans((data ?? []) as SavedBeanOption[]);
   }
 
+  async function loadRecentBrewForBean(beanUid: string): Promise<BrewTemplateRow | null> {
+    if (!beanUid) return null;
+
+    if (isGuest) {
+      return (localListBrewsWithBeans().find((brew) => brew.bean_uid === beanUid) as BrewTemplateRow | undefined) ?? null;
+    }
+
+    const supabase = getSupabaseClient();
+    const { data, error } = await supabase
+      .from('brews')
+      .select(
+        `
+        uid,
+        bean_uid,
+        brew_date,
+        recipe,
+        coffee_dose_g,
+        coffee_yield_g,
+        coffee_tds,
+        water,
+        water_temp_c,
+        grind_median_um,
+        rating,
+        grinder_setting,
+        extraction_note,
+        taste_note,
+        taste_flavor_notes,
+        beans ( uid, bean_name, roastery, producer, origin_location, origin_country, process, varietal, cup_notes, cup_flavor_notes, roasted_on ),
+        grinders ( uid, maker, model )
+      `,
+      )
+      .eq('bean_uid', beanUid)
+      .order('brew_date', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    return (data as BrewTemplateRow | null) ?? null;
+  }
+
+  async function loadDuplicateBrew(uid: string): Promise<BrewTemplateRow | null> {
+    if (!uid) return null;
+
+    if (isGuest) {
+      return (localListBrewsWithBeans().find((brew) => brew.uid === uid) as BrewTemplateRow | undefined) ?? null;
+    }
+
+    const supabase = getSupabaseClient();
+    const { data, error } = await supabase
+      .from('brews')
+      .select(
+        `
+        uid,
+        bean_uid,
+        brew_date,
+        recipe,
+        coffee_dose_g,
+        coffee_yield_g,
+        coffee_tds,
+        water,
+        water_temp_c,
+        grind_median_um,
+        rating,
+        grinder_setting,
+        extraction_note,
+        taste_note,
+        taste_flavor_notes,
+        beans ( uid, bean_name, roastery, producer, origin_location, origin_country, process, varietal, cup_notes, cup_flavor_notes, roasted_on ),
+        grinders ( uid, maker, model )
+      `,
+      )
+      .eq('uid', uid)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    return (data as BrewTemplateRow | null) ?? null;
+  }
+
   useEffect(() => {
     void loadSavedBeans().catch((e) => {
       setBeanMsg(e instanceof Error ? e.message : t('common.loadFailed'));
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user.uid, isGuest]);
+
+  useEffect(() => {
+    const uid = (initialBeanUid ?? '').trim();
+    if (!uid || appliedInitialBeanUidRef.current === uid) return;
+    const found = savedBeans.find((b) => b.uid === uid);
+    if (!found) return;
+    applySavedBeanDetails(found);
+    appliedInitialBeanUidRef.current = uid;
+  }, [initialBeanUid, savedBeans]);
+
+  useEffect(() => {
+    const duplicateUid = (initialDuplicateBrewUid ?? '').trim();
+    if (!duplicateUid || appliedDuplicateBrewUidRef.current === duplicateUid) return;
+    let active = true;
+
+    void loadDuplicateBrew(duplicateUid)
+      .then((row) => {
+        if (!active || !row) return;
+        applyBrewTemplate(row, { message: t('newBrew.preset.appliedFromHistory') });
+        appliedDuplicateBrewUidRef.current = duplicateUid;
+      })
+      .catch((e) => {
+        if (!active) return;
+        setError(e instanceof Error ? e.message : t('common.loadFailed'));
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [initialDuplicateBrewUid, isGuest, t]);
+
+  useEffect(() => {
+    const dose = (initialDoseG ?? '').trim();
+    if (!dose || appliedInitialDoseRef.current === dose) return;
+    setBrew((prev) => ({ ...prev, coffee_dose_g: dose }));
+    setPresetMsg(t('newBrew.preset.appliedDoseFromLabel', { grams: dose }));
+    appliedInitialDoseRef.current = dose;
+  }, [initialDoseG, t]);
+
+  useEffect(() => {
+    if (!selectedBeanUid) {
+      setRecentBeanBrew(null);
+      return;
+    }
+
+    let active = true;
+    setRecentBrewLoading(true);
+    void loadRecentBrewForBean(selectedBeanUid)
+      .then((row) => {
+        if (!active) return;
+        setRecentBeanBrew(row);
+      })
+      .catch((e) => {
+        if (!active) return;
+        setError(e instanceof Error ? e.message : t('common.loadFailed'));
+      })
+      .finally(() => {
+        if (active) setRecentBrewLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [selectedBeanUid, isGuest, t]);
 
   // -----------------------------------------------------------------------
   // Grinder helpers
@@ -531,24 +766,14 @@ export function NewBrewPage({ user, isGuest = false }: Props) {
                 const nextUid = e.target.value;
                 setSelectedBeanUid(nextUid);
                 setBeanMsg(null);
+                setPresetMsg(null);
                 if (!nextUid) {
                   setBean(emptyBean);
                   return;
                 }
                 const found = savedBeans.find((b) => b.uid === nextUid);
                 if (!found) return;
-                setBean({
-                  bean_name: found.bean_name ?? '',
-                  roastery: found.roastery ?? '',
-                  producer: found.producer ?? '',
-                  origin_location: found.origin_location ?? '',
-                  origin_country: found.origin_country ?? '',
-                  process: found.process ?? '',
-                  varietal: found.varietal ?? '',
-                  cup_notes: found.cup_notes ?? '',
-                  cup_flavor_notes: (found.cup_flavor_notes ?? []) as FlavorNote[],
-                  roasted_on: found.roasted_on ?? ''
-                });
+                applySavedBeanDetails(found);
               }}
             >
               <option value="">{t('newBrew.bean.savedList.none')}</option>
@@ -569,6 +794,41 @@ export function NewBrewPage({ user, isGuest = false }: Props) {
           </button>
         </div>
         {beanMsg && <div className="text-xs text-gray-600">{beanMsg}</div>}
+        {(presetMsg || recentBrewLoading || recentBeanBrew) && (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 space-y-2">
+            <div className="text-xs font-semibold text-amber-900">{t('newBrew.preset.sectionTitle')}</div>
+            {presetMsg && <div className="text-xs text-amber-800">{presetMsg}</div>}
+            {recentBrewLoading ? (
+              <div className="text-xs text-amber-800">{t('newBrew.preset.loading')}</div>
+            ) : recentBeanBrew ? (
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <div className="min-w-0">
+                  <div className="text-xs font-medium text-amber-900">{t('newBrew.preset.lastBrew')}</div>
+                  <div className="text-xs text-amber-800">
+                    {t('newBrew.preset.summary', {
+                      date: fmtDate(recentBeanBrew.brew_date),
+                      dose: recentBeanBrew.coffee_dose_g ?? t('common.none'),
+                      yield: recentBeanBrew.coffee_yield_g ?? t('common.none'),
+                      grinder: grinderLabelForPreset(recentBeanBrew),
+                    })}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="px-3 py-1.5 rounded-lg border border-amber-300 bg-white text-xs text-amber-900 hover:bg-amber-100 whitespace-nowrap"
+                  onClick={() =>
+                    applyBrewTemplate(recentBeanBrew, {
+                      message: t('newBrew.preset.appliedFromBean'),
+                      overrideDoseG: (initialDoseG ?? '').trim() || undefined,
+                    })
+                  }
+                >
+                  {t('newBrew.preset.applyLastBrew')}
+                </button>
+              </div>
+            ) : null}
+          </div>
+        )}
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div className="sm:col-span-2">
