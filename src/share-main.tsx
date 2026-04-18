@@ -4,7 +4,6 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { I18nProvider } from './i18n/I18nProvider';
 import { PublicSharedBrewApp } from './public/PublicSharedBrewApp';
 import './index.css';
-import 'galmuri/dist/galmuri.css';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
