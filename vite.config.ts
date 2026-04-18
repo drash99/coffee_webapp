@@ -1,3 +1,4 @@
+import { fileURLToPath, URL } from 'node:url'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
@@ -6,6 +7,15 @@ import { VitePWA } from 'vite-plugin-pwa'
 export default defineConfig({
   // GitHub Pages serves from https://user.github.io/repo-name/ so base must be /repo-name/
   base: process.env.VITE_BASE_PATH || '/',
+  build: {
+    rollupOptions: {
+      input: {
+        main: fileURLToPath(new URL('./index.html', import.meta.url)),
+        share: fileURLToPath(new URL('./share.html', import.meta.url)),
+        label: fileURLToPath(new URL('./label.html', import.meta.url)),
+      },
+    },
+  },
   define: {
     __BUILD_TIME__: JSON.stringify(new Date().toISOString()),
   },

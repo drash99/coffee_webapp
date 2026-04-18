@@ -10,6 +10,7 @@ type Props = {
   labelUid: string;
   viewerUser: AppUser | null;
   isGuest: boolean;
+  standalone?: boolean;
 };
 
 type PublicBeanLabelRow = {
@@ -34,7 +35,7 @@ function navigate(url: string) {
   window.dispatchEvent(new PopStateEvent('popstate'));
 }
 
-export function BeanLabelInfoPage({ labelUid, viewerUser, isGuest }: Props) {
+export function BeanLabelInfoPage({ labelUid, viewerUser, isGuest, standalone = false }: Props) {
   const { t } = useI18n();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -82,13 +83,15 @@ export function BeanLabelInfoPage({ labelUid, viewerUser, isGuest }: Props) {
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
         <div className="px-4 py-3 border-b bg-gray-50 text-sm font-medium text-gray-700 flex items-center justify-between gap-3">
           <span>{t('beanLabelInfo.title')}</span>
-          <button
-            type="button"
-            className="px-3 py-1.5 rounded-lg border bg-white text-xs hover:bg-gray-50 whitespace-nowrap"
-            onClick={() => navigate('/')}
-          >
-            {t('beanLabelInfo.backToApp')}
-          </button>
+          {!standalone && (
+            <button
+              type="button"
+              className="px-3 py-1.5 rounded-lg border bg-white text-xs hover:bg-gray-50 whitespace-nowrap"
+              onClick={() => navigate('/')}
+            >
+              {t('beanLabelInfo.backToApp')}
+            </button>
+          )}
         </div>
 
         {loading ? (
@@ -172,7 +175,7 @@ export function BeanLabelInfoPage({ labelUid, viewerUser, isGuest }: Props) {
               <NoteDotsList notes={row.cup_flavor_notes ?? []} emptyLabel={t('common.none')} />
             </div>
 
-            {!isOwner && (
+            {!standalone && !isOwner && (
               <div className="text-xs text-gray-500 bg-gray-50 border border-gray-200 rounded-lg p-2">
                 {t('beanLabelInfo.ownerHint')}
               </div>

@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>BeanLog</title>
+    <script>
+      (function () {
+        var path = window.location.pathname || "/";
+        var search = window.location.search || "";
+        var hash = window.location.hash || "";
+        var segments = path.split("/").filter(Boolean);
+        var routeName = segments.length >= 2 ? segments[segments.length - 2] : "";
+        var rawValue = segments.length >= 1 ? segments[segments.length - 1] : "";
+        var queryKey = routeName === "share" ? "share" : routeName === "l" || routeName === "label" ? "label" : "";
+        var pageName = queryKey === "share" ? "share.html" : queryKey === "label" ? "label.html" : "index.html";
+        var baseSegments = queryKey ? segments.slice(0, -2) : segments.slice(0, -1);
+        var basePath = "/" + (baseSegments.length > 0 ? baseSegments.join("/") + "/" : "");
+        var params = new URLSearchParams(search);
+
+        if (queryKey && rawValue) {
+          try {
+            params.set(queryKey, decodeURIComponent(rawValue));
+          } catch (_error) {
+            params.set(queryKey, rawValue);
+          }
+        }
+
+        var nextSearch = params.toString();
+        var target = basePath + pageName + (nextSearch ? "?" + nextSearch : "") + hash;
+        window.location.replace(target || "/index.html");
+      })();
+    </script>
+  </head>
+  <body>
+    Redirecting to BeanLog...
+  </body>
+</html>

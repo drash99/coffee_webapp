@@ -1,0 +1,17 @@
+import React from 'react';
+import ReactDOM from 'react-dom/client';
+import { ErrorBoundary } from './components/ErrorBoundary';
+import { I18nProvider } from './i18n/I18nProvider';
+import { PublicBeanLabelApp } from './public/PublicBeanLabelApp';
+import './index.css';
+import 'galmuri/dist/galmuri.css';
+
+ReactDOM.createRoot(document.getElementById('root')!).render(
+  <React.StrictMode>
+    <ErrorBoundary>
+      <I18nProvider>
+        <PublicBeanLabelApp />
+      </I18nProvider>
+    </ErrorBoundary>
+  </React.StrictMode>,
+);
