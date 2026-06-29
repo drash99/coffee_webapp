@@ -282,6 +282,9 @@ export const koKR: Record<keyof typeof enUS, string> = {
   'history.filter.title': '필터',
   'history.filter.clearAll': '모두 지우기',
   'history.filter.showing': '{total}개 중 {shown}개 표시',
+  'history.exportJson': 'JSON 내보내기',
+  'history.exportJson.copied': '브루 {count}개를 JSON으로 클립보드에 복사했습니다.',
+  'history.exportJson.failed': '브루 JSON 복사에 실패했습니다.',
 
   // History: AI guidance
   'history.ai.button': 'AI 가이드 받기',
@@ -327,6 +330,9 @@ export const koKR: Record<keyof typeof enUS, string> = {
   'beanHistory.delete.confirm': '이 원두를 삭제하시겠습니까? 이 원두를 사용하는 모든 브루도 함께 삭제됩니다. 되돌릴 수 없습니다.',
   'beanHistory.delete.deleting': '삭제 중…',
   'beanHistory.delete.failed': '원두 삭제에 실패했습니다.',
+  'beanHistory.exportJson': 'JSON 내보내기',
+  'beanHistory.exportJson.copied': '원두 {count}개를 JSON으로 클립보드에 복사했습니다.',
+  'beanHistory.exportJson.failed': '원두 JSON 복사에 실패했습니다.',
 
   // Bean labels (print + QR)
   'beanLabels.printMode': '라벨 인쇄',

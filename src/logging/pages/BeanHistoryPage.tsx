@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { ClipboardCopy } from 'lucide-react';
 import type { AppUser } from '../../auth/types';
 import { getSupabaseClient } from '../../config/supabase';
 import { useI18n } from '../../i18n/I18nProvider';
@@ -120,6 +121,7 @@ export function BeanHistoryPage({ user, isGuest = false }: Props) {
   const [editError, setEditError] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState<BeanInput | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
+  const [exportMsg, setExportMsg] = useState<string | null>(null);
 
   const hookBeanSugg = useBeanSuggestions(isGuest ? undefined : user.uid);
 
@@ -283,6 +285,37 @@ export function BeanHistoryPage({ user, isGuest = false }: Props) {
     }
   }
 
+  async function exportBeanHistoryJson() {
+    setExportMsg(null);
+    const payload = {
+      type: 'beanlog.bean_history',
+      version: 1,
+      exported_at: new Date().toISOString(),
+      count: rows.length,
+      beans: rows.map((row) => ({
+        uid: row.uid,
+        bean_name: row.bean_name,
+        roastery: row.roastery,
+        producer: row.producer,
+        origin_location: row.origin_location,
+        origin_country: row.origin_country,
+        process: row.process,
+        varietal: row.varietal,
+        cup_notes: row.cup_notes,
+        cup_flavor_notes: row.cup_flavor_notes ?? [],
+        roasted_on: row.roasted_on,
+        created_at: row.created_at ?? null,
+      })),
+    };
+
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
+      setExportMsg(t('beanHistory.exportJson.copied', { count: String(rows.length) }));
+    } catch {
+      setExportMsg(t('beanHistory.exportJson.failed'));
+    }
+  }
+
   // -----------------------------------------------------------------------
   // Effects
   // -----------------------------------------------------------------------
@@ -316,7 +349,7 @@ export function BeanHistoryPage({ user, isGuest = false }: Props) {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
         <h2 className="text-lg font-semibold">{t('beanHistory.title')}</h2>
         <div className="flex items-center gap-2 flex-wrap">
           <button
@@ -326,6 +359,15 @@ export function BeanHistoryPage({ user, isGuest = false }: Props) {
             disabled={rows.length === 0}
           >
             {t('beanLabels.printMode')}
+          </button>
+          <button
+            type="button"
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border bg-white text-sm hover:bg-gray-50 disabled:bg-gray-100 whitespace-nowrap"
+            onClick={() => void exportBeanHistoryJson()}
+            disabled={rows.length === 0}
+          >
+            <ClipboardCopy className="w-4 h-4" aria-hidden="true" />
+            {t('beanHistory.exportJson')}
           </button>
           <button
             type="button"
@@ -339,6 +381,7 @@ export function BeanHistoryPage({ user, isGuest = false }: Props) {
       </div>
 
       {error && <div className="text-sm text-red-700 bg-red-50 border border-red-100 rounded-lg p-2">{error}</div>}
+      {exportMsg && <div className="text-xs text-gray-600 bg-gray-50 border border-gray-200 rounded-lg p-2">{exportMsg}</div>}
 
       {rows.length === 0 && !loading && (
         <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 text-sm text-gray-600">

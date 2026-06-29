@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { ClipboardCopy } from 'lucide-react';
 import type { AppUser } from '../../auth/types';
 import { getSupabaseClient } from '../../config/supabase';
 import type { BeanRow, BrewRow, FlavorNote, GrinderRow } from '../types';
@@ -153,6 +154,7 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
   const [shareUrl, setShareUrl] = useState<string | null>(null);
   const [savePngBusy, setSavePngBusy] = useState(false);
   const [savePngMsg, setSavePngMsg] = useState<string | null>(null);
+  const [exportMsg, setExportMsg] = useState<string | null>(null);
   const [aiGuidance, setAiGuidance] = useState<AiGuidance | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
@@ -662,6 +664,73 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
     }
   }
 
+  async function exportBrewHistoryJson() {
+    setExportMsg(null);
+    const payload = {
+      type: 'beanlog.brew_history',
+      version: 1,
+      exported_at: new Date().toISOString(),
+      count: sortedRows.length,
+      total_count: rows.length,
+      sort: sortMode,
+      bean_uid_filter: beanUidFilter ?? null,
+      filters,
+      brews: sortedRows.map((row) => ({
+        uid: row.uid,
+        brew_date: row.brew_date,
+        created_at: row.created_at ?? null,
+        bean_uid: row.bean_uid,
+        bean: row.beans
+          ? {
+              uid: row.beans.uid,
+              bean_name: row.beans.bean_name,
+              roastery: row.beans.roastery,
+              producer: row.beans.producer,
+              origin_location: row.beans.origin_location,
+              origin_country: row.beans.origin_country,
+              process: row.beans.process,
+              varietal: row.beans.varietal,
+              roasted_on: row.beans.roasted_on,
+              cup_flavor_notes: row.beans.cup_flavor_notes ?? [],
+            }
+          : null,
+        grinder: row.grinders
+          ? {
+              uid: row.grinders.uid,
+              maker: row.grinders.maker,
+              model: row.grinders.model,
+              setting: row.grinder_setting,
+            }
+          : row.grinder_setting
+            ? {
+                uid: null,
+                maker: null,
+                model: null,
+                setting: row.grinder_setting,
+              }
+            : null,
+        recipe: row.recipe,
+        coffee_dose_g: row.coffee_dose_g,
+        coffee_yield_g: row.coffee_yield_g,
+        coffee_tds: row.coffee_tds,
+        water: row.water,
+        water_temp_c: row.water_temp_c,
+        grind_median_um: row.grind_median_um,
+        rating: row.rating,
+        extraction_note: row.extraction_note,
+        taste_note: row.taste_note,
+        taste_flavor_notes: row.taste_flavor_notes ?? [],
+      })),
+    };
+
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
+      setExportMsg(t('history.exportJson.copied', { count: String(sortedRows.length) }));
+    } catch {
+      setExportMsg(t('history.exportJson.failed'));
+    }
+  }
+
   // -----------------------------------------------------------------------
   // Delete brew
   // -----------------------------------------------------------------------
@@ -729,9 +798,9 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
         <h2 className="text-lg font-semibold">{t('history.title')}</h2>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap justify-end">
           <button
             type="button"
             className={`px-3 py-2 rounded-lg border text-sm ${
@@ -740,6 +809,15 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
             onClick={() => setShowFilters(!showFilters)}
           >
             {t('history.filter.button')}{activeFilterCount > 0 ? ` (${activeFilterCount})` : ''}
+          </button>
+          <button
+            type="button"
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border bg-white text-sm hover:bg-gray-50 disabled:bg-gray-100 whitespace-nowrap"
+            onClick={() => void exportBrewHistoryJson()}
+            disabled={sortedRows.length === 0}
+          >
+            <ClipboardCopy className="w-4 h-4" aria-hidden="true" />
+            {t('history.exportJson')}
           </button>
           <button
             type="button"
@@ -847,6 +925,7 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
       )}
 
       {error && <div className="text-sm text-red-700 bg-red-50 border border-red-100 rounded-lg p-2">{error}</div>}
+      {exportMsg && <div className="text-xs text-gray-600 bg-gray-50 border border-gray-200 rounded-lg p-2">{exportMsg}</div>}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden flex flex-col">

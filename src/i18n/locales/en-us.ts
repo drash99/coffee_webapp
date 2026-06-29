@@ -278,6 +278,9 @@ export const enUS = {
   'history.filter.title': 'Filters',
   'history.filter.clearAll': 'Clear all',
   'history.filter.showing': 'Showing {shown} of {total} brews',
+  'history.exportJson': 'Export JSON',
+  'history.exportJson.copied': 'Copied {count} brews as JSON.',
+  'history.exportJson.failed': 'Failed to copy brew JSON.',
 
   // History: AI guidance
   'history.ai.button': 'Get AI guidance',
@@ -323,6 +326,9 @@ export const enUS = {
   'beanHistory.delete.confirm': 'Are you sure you want to delete this bean? All brews using this bean will also be deleted. This cannot be undone.',
   'beanHistory.delete.deleting': 'Deleting…',
   'beanHistory.delete.failed': 'Failed to delete bean.',
+  'beanHistory.exportJson': 'Export JSON',
+  'beanHistory.exportJson.copied': 'Copied {count} beans as JSON.',
+  'beanHistory.exportJson.failed': 'Failed to copy bean JSON.',
 
   // Bean labels (print + QR)
   'beanLabels.printMode': 'Print labels',
