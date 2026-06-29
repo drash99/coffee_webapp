@@ -1,0 +1,23 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bean" x1="360" y1="290" x2="690" y2="740" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#5D3429" />
+      <stop offset="1" stop-color="#341912" />
+    </linearGradient>
+  </defs>
+
+  <ellipse cx="518" cy="514" rx="228" ry="318" transform="rotate(-10 518 514)" fill="url(#bean)" />
+  <path
+    d="M481.848 285.997C433.909 369.158 423.548 470.952 440.893 564.92C456.68 650.444 495.279 729.645 557.54 792.498"
+    stroke="#8A5536"
+    stroke-linecap="round"
+    stroke-width="70"
+  />
+  <path
+    d="M478.153 288.031C432.278 370.867 423.772 469.911 442.198 561.615C459.29 646.682 497.649 724.776 552.256 784.583"
+    stroke="#EBC394"
+    stroke-linecap="round"
+    stroke-opacity="0.34"
+    stroke-width="22"
+  />
+</svg>

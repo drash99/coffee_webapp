@@ -3,5 +3,5 @@
     <string name="app_name">BeanLog</string>
     <string name="title_activity_main">BeanLog</string>
     <string name="package_name">com.beanlog.app</string>
-    <string name="custom_url_scheme">com.beanlog.app</string>
+    <string name="custom_url_scheme">beanlog</string>
 </resources>

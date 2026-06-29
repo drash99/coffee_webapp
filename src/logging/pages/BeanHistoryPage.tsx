@@ -25,6 +25,7 @@ import {
   getDefaultLabelGrams,
   getLabelPrinterName,
 } from '../labels/prefs';
+import { buildPublicBeanLabelUrl } from '../utils/publicLinks';
 
 function compactLabelText(parts: Array<string | null | undefined>): string | null {
   const values = parts.map((part) => part?.trim() ?? '').filter(Boolean);
@@ -677,12 +678,14 @@ function BeanLabelPrintView({ t, isGuest, beans, initialBeanUid, onBack }: BeanL
     setBusy(true);
     setMsg(null);
     try {
-      const origin = window.location.origin;
       const next: LabelPreview[] = [];
       for (let i = 0; i < n; i++) {
         const uid = crypto.randomUUID();
-        const url = `${origin}/label/${uid}`;
-        const qrDataUrl = await toQrDataUrl(url, 96);
+        const url = buildPublicBeanLabelUrl(uid);
+        const qrDataUrl = await toQrDataUrl(url, 160, {
+          errorCorrectionLevel: 'L',
+          margin: 1,
+        });
         const { roasteryText, originText, producerProcessText, varietalText, footerText } = buildLabelText(selected, gramsNum);
         const printDataUrl = await renderBeanLabelDataUrl({
           roasteryText,
@@ -692,6 +695,7 @@ function BeanLabelPrintView({ t, isGuest, beans, initialBeanUid, onBack }: BeanL
           varietalText,
           footerText,
           qrDataUrl,
+          qrText: url,
         });
         next.push({
           uid,
@@ -749,18 +753,18 @@ function BeanLabelPrintView({ t, isGuest, beans, initialBeanUid, onBack }: BeanL
           body { background: white !important; }
         }
         .label-sheet {
-          max-width: 70mm;
+          max-width: 50mm;
           margin: 0 auto;
         }
         .label {
-          /* Brother TZe 24mm tape: keep height <= 24mm, keep length small to save tape */
-          width: 52mm;
+          /* Brother TZe 24mm tape: 24mm tall with a shorter ~37mm label length to save tape */
+          width: 37mm;
           height: 24mm;
           border: 1px solid #e5e7eb;
           border-radius: 4px;
-          padding: 2mm 2mm;
+          padding: 1.8mm 1.8mm;
           display: flex;
-          gap: 2mm;
+          gap: 1.6mm;
           align-items: center;
           page-break-inside: avoid;
         }
@@ -783,8 +787,8 @@ function BeanLabelPrintView({ t, isGuest, beans, initialBeanUid, onBack }: BeanL
           <div
             className={`text-sm rounded-lg border p-2 ${
               msg.tone === 'error'
-                ? 'text-red-700 bg-red-50 border-red-100'
-                : 'text-amber-800 bg-amber-50 border-amber-200'
+                ? 'text-red-700 bg-red-50 border-red-100 whitespace-pre-line'
+                : 'text-amber-800 bg-amber-50 border-amber-200 whitespace-pre-line'
             }`}
           >
             {msg.text}

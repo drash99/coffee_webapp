@@ -14,25 +14,36 @@ import { SignupPage } from './SignupPage';
 import { useRef, useState } from 'react';
 import type { LanguageCode } from '../../i18n/i18n';
 import {
-  clearGeminiApiKey,
-  DEFAULT_GEMINI_MODEL_ID,
-  getGeminiApiKey,
-  getGeminiModelId,
-  getGeminiTempUnit,
-  setGeminiApiKey,
-  setGeminiModelId,
-  setGeminiTempUnit,
+  buildAiServerBaseUrl,
+  clearAiBearerToken,
+  DEFAULT_AI_MODEL_ID,
+  DEFAULT_AI_SERVER_HOST,
+  DEFAULT_AI_SERVER_PORT,
+  getAiBearerToken,
+  getAiModelId,
+  getAiServerHost,
+  getAiServerPort,
+  getAiTempUnit,
+  setAiBearerToken,
+  setAiModelId,
+  setAiServerHost,
+  setAiServerPort,
+  setAiTempUnit,
 } from '../ai/prefs';
+import { fetchAiServerHealth, fetchAiServerModels, type AiServerModel } from '../ai/customServerClient';
 import {
   DEFAULT_BROTHER_PRINTER_NAME,
+  DEFAULT_LABEL_PUBLIC_BASE_URL,
   getDefaultLabelCount,
   getDefaultLabelGrams,
+  getLabelPublicBaseUrl,
   getLabelPrinterName,
+  setLabelPublicBaseUrl,
   setDefaultLabelCount,
   setDefaultLabelGrams,
   setLabelPrinterName,
 } from '../labels/prefs';
-import { canPrintBrotherLabels, printBrotherLabels } from '../../platform';
+import { canPrintBrotherLabels, getPlatform, printBrotherLabels } from '../../platform';
 import { renderBeanLabelDataUrl } from '../utils/beanLabelImage';
 import { toQrDataUrl } from '../utils/qr';
 
@@ -60,17 +71,24 @@ export function SettingsPage({
   setLang,
 }: Props) {
   const { t } = useI18n();
+  const isIos = getPlatform() === 'ios';
   const [authTab, setAuthTab] = useState<AuthTab>('login');
   const [migrating, setMigrating] = useState(false);
   const [migrateMsg, setMigrateMsg] = useState<string | null>(null);
-  const [geminiKeyInput, setGeminiKeyInput] = useState(() => getGeminiApiKey() ?? '');
-  const [geminiModelIdInput, setGeminiModelIdInput] = useState(() => getGeminiModelId());
-  const [geminiTempUnit, setGeminiTempUnitState] = useState<'C' | 'F'>(() => getGeminiTempUnit());
-  const [geminiMsg, setGeminiMsg] = useState<string | null>(null);
+  const [aiServerHostInput, setAiServerHostInput] = useState(() => getAiServerHost());
+  const [aiServerPortInput, setAiServerPortInput] = useState(() => getAiServerPort());
+  const [aiBearerTokenInput, setAiBearerTokenInput] = useState(() => getAiBearerToken() ?? '');
+  const [aiModelIdInput, setAiModelIdInput] = useState(() => getAiModelId());
+  const [aiTempUnit, setAiTempUnitState] = useState<'C' | 'F'>(() => getAiTempUnit());
+  const [aiMsg, setAiMsg] = useState<{ tone: 'error' | 'success'; text: string } | null>(null);
+  const [aiModels, setAiModels] = useState<AiServerModel[]>([]);
+  const [aiTesting, setAiTesting] = useState(false);
+  const [aiLoadingModels, setAiLoadingModels] = useState(false);
   const [labelPrinterNameInput, setLabelPrinterNameInput] = useState(() => getLabelPrinterName());
+  const [labelPublicBaseUrlInput, setLabelPublicBaseUrlInput] = useState(() => getLabelPublicBaseUrl());
   const [labelDefaultGramsInput, setLabelDefaultGramsInput] = useState(() => getDefaultLabelGrams());
   const [labelDefaultCountInput, setLabelDefaultCountInput] = useState(() => getDefaultLabelCount());
-  const [labelMsg, setLabelMsg] = useState<string | null>(null);
+  const [labelMsg, setLabelMsg] = useState<{ tone: 'error' | 'success'; text: string } | null>(null);
   const [testPrintBusy, setTestPrintBusy] = useState(false);
   const [backupMsg, setBackupMsg] = useState<string | null>(null);
   const restoreInputRef = useRef<HTMLInputElement | null>(null);
@@ -102,27 +120,131 @@ export function SettingsPage({
     }
   }
 
+  function buildAiConfigFromInputs() {
+    const host = aiServerHostInput.trim() || DEFAULT_AI_SERVER_HOST;
+    const port = aiServerPortInput.trim() || DEFAULT_AI_SERVER_PORT;
+    const modelId = aiModelIdInput.trim() || DEFAULT_AI_MODEL_ID;
+    const bearerToken = aiBearerTokenInput.trim() || null;
+
+    try {
+      void buildAiServerBaseUrl(host, port);
+    } catch {
+      throw new Error(t('settings.ai.server.invalid'));
+    }
+
+    return {
+      host,
+      port,
+      bearerToken,
+      modelId,
+    };
+  }
+
+  function saveAiSettings() {
+    try {
+      const next = buildAiConfigFromInputs();
+      setAiServerHost(next.host);
+      setAiServerPort(next.port);
+      setAiBearerToken(next.bearerToken ?? '');
+      setAiModelId(next.modelId);
+      setAiTempUnit(aiTempUnit);
+      setAiServerHostInput(next.host);
+      setAiServerPortInput(next.port);
+      setAiBearerTokenInput(next.bearerToken ?? '');
+      setAiModelIdInput(next.modelId);
+      setAiMsg({ tone: 'success', text: t('settings.ai.saved') });
+    } catch (e) {
+      setAiMsg({
+        tone: 'error',
+        text: e instanceof Error ? e.message : t('common.loadFailed'),
+      });
+    }
+  }
+
+  async function handleAiTestConnection() {
+    setAiTesting(true);
+    setAiMsg(null);
+    try {
+      const config = buildAiConfigFromInputs();
+      const health = await fetchAiServerHealth(config);
+      setAiMsg({
+        tone: 'success',
+        text: t('settings.ai.health.ok', {
+          server: health.server || t('common.none'),
+          version: health.version || t('common.none'),
+        }),
+      });
+    } catch (e) {
+      setAiMsg({
+        tone: 'error',
+        text: e instanceof Error ? e.message : t('settings.ai.health.failed'),
+      });
+    } finally {
+      setAiTesting(false);
+    }
+  }
+
+  async function handleAiLoadModels() {
+    setAiLoadingModels(true);
+    setAiMsg(null);
+    try {
+      const config = buildAiConfigFromInputs();
+      const models = await fetchAiServerModels(config);
+      setAiModels(models);
+      if (models.length > 0 && !aiModelIdInput.trim()) {
+        setAiModelIdInput(models[0].id);
+      }
+      setAiMsg({
+        tone: 'success',
+        text:
+          models.length > 0
+            ? t('settings.ai.models.loaded', { count: String(models.length) })
+            : t('settings.ai.models.empty'),
+      });
+    } catch (e) {
+      setAiMsg({
+        tone: 'error',
+        text: e instanceof Error ? e.message : t('settings.ai.models.failed'),
+      });
+    } finally {
+      setAiLoadingModels(false);
+    }
+  }
+
   function saveLabelSettings() {
+    if (labelPublicBaseUrlInput.trim() && !isValidPublicUrl(labelPublicBaseUrlInput)) {
+      setLabelMsg({ tone: 'error', text: t('settings.labels.publicBaseUrl.invalid') });
+      return;
+    }
     setLabelPrinterName(labelPrinterNameInput);
+    setLabelPublicBaseUrl(labelPublicBaseUrlInput);
     setDefaultLabelGrams(labelDefaultGramsInput);
     setDefaultLabelCount(labelDefaultCountInput);
     setLabelPrinterNameInput(getLabelPrinterName());
+    setLabelPublicBaseUrlInput(getLabelPublicBaseUrl());
     setLabelDefaultGramsInput(getDefaultLabelGrams());
     setLabelDefaultCountInput(getDefaultLabelCount());
-    setLabelMsg(t('settings.labels.saved'));
+    setLabelMsg({ tone: 'success', text: t('settings.labels.saved') });
   }
 
   async function handleTestPrint() {
     if (!supportsNativeLabelPrint) {
-      setLabelMsg(t('settings.labels.testPrintUnavailable'));
+      setLabelMsg({ tone: 'error', text: t('settings.labels.testPrintUnavailable') });
       return;
     }
 
     setTestPrintBusy(true);
     setLabelMsg(null);
     try {
+      if (labelPublicBaseUrlInput.trim() && !isValidPublicUrl(labelPublicBaseUrlInput)) {
+        throw new Error(t('settings.labels.publicBaseUrl.invalid'));
+      }
       const printerName = labelPrinterNameInput.trim() || DEFAULT_BROTHER_PRINTER_NAME;
-      const qrDataUrl = await toQrDataUrl(window.location.origin, 96);
+      const publicBaseUrl = labelPublicBaseUrlInput.trim() || DEFAULT_LABEL_PUBLIC_BASE_URL;
+      const qrDataUrl = await toQrDataUrl(publicBaseUrl, 160, {
+        errorCorrectionLevel: 'L',
+        margin: 1,
+      });
       const printDataUrl = await renderBeanLabelDataUrl({
         roasteryText: t('app.title'),
         beanName: t('settings.labels.testPrint'),
@@ -131,14 +253,18 @@ export function SettingsPage({
         varietalText: null,
         footerText: t('settings.labels.testFooter'),
         qrDataUrl,
+        qrText: publicBaseUrl,
       });
       await printBrotherLabels({
         printerName,
         labels: [{ pngDataUrl: printDataUrl }],
       });
-      setLabelMsg(t('settings.labels.testPrinted'));
+      setLabelMsg({ tone: 'success', text: t('settings.labels.testPrinted') });
     } catch (e) {
-      setLabelMsg(e instanceof Error ? e.message : t('settings.labels.testPrintUnavailable'));
+      setLabelMsg({
+        tone: 'error',
+        text: e instanceof Error ? e.message : t('settings.labels.testPrintUnavailable'),
+      });
     } finally {
       setTestPrintBusy(false);
     }
@@ -190,6 +316,15 @@ export function SettingsPage({
     }
   }
 
+  function isValidPublicUrl(value: string): boolean {
+    try {
+      const url = new URL(value.trim());
+      return url.protocol === 'http:' || url.protocol === 'https:';
+    } catch {
+      return false;
+    }
+  }
+
   return (
     <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
       {/* About */}
@@ -227,111 +362,169 @@ export function SettingsPage({
         </div>
       </section>
 
-      {/* AI brew guidance (Gemini) */}
-      <section className="p-4 border-b border-gray-100 space-y-3">
-        <h2 className="text-sm font-semibold text-gray-700 mb-1">{t('settings.ai.title')}</h2>
-        <p className="text-xs text-gray-500 whitespace-pre-line">{t('settings.ai.description')}</p>
-        <div className="space-y-2">
-          <label className="block text-xs font-medium text-gray-500 mb-1">
-            {t('settings.ai.key.label')}
-          </label>
-          <input
-            className="w-full p-2 border rounded-lg text-base"
-            type="password"
-            value={geminiKeyInput}
-            onChange={(e) => setGeminiKeyInput(e.target.value)}
-            placeholder={t('settings.ai.key.placeholder')}
-          />
+      {isIos && (
+        <section className="p-4 border-b border-gray-100 space-y-3">
+          <h2 className="text-sm font-semibold text-gray-700 mb-1">{t('settings.ai.title')}</h2>
+          <p className="text-xs text-gray-500 whitespace-pre-line">{t('settings.ai.description')}</p>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">{t('settings.ai.host.label')}</label>
+              <input
+                className="w-full p-2 border rounded-lg text-base"
+                type="text"
+                value={aiServerHostInput}
+                onChange={(e) => setAiServerHostInput(e.target.value)}
+                placeholder={t('settings.ai.host.placeholder')}
+                spellCheck={false}
+                autoCapitalize="off"
+                autoCorrect="off"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">{t('settings.ai.port.label')}</label>
+              <input
+                className="w-full p-2 border rounded-lg text-base"
+                type="text"
+                value={aiServerPortInput}
+                onChange={(e) => setAiServerPortInput(e.target.value)}
+                placeholder={t('settings.ai.port.placeholder')}
+                inputMode="numeric"
+                spellCheck={false}
+                autoCapitalize="off"
+                autoCorrect="off"
+              />
+            </div>
+            <div className="sm:col-span-2">
+              <label className="block text-xs font-medium text-gray-500 mb-1">{t('settings.ai.token.label')}</label>
+              <input
+                className="w-full p-2 border rounded-lg text-base"
+                type="password"
+                value={aiBearerTokenInput}
+                onChange={(e) => setAiBearerTokenInput(e.target.value)}
+                placeholder={t('settings.ai.token.placeholder')}
+              />
+              <div className="mt-2 flex items-center gap-2 flex-wrap">
+                <button
+                  type="button"
+                  className="px-3 py-1.5 rounded-lg border bg-white text-xs hover:bg-gray-50 whitespace-nowrap"
+                  onClick={() => {
+                    clearAiBearerToken();
+                    setAiBearerTokenInput('');
+                    setAiMsg({ tone: 'success', text: t('settings.ai.token.cleared') });
+                  }}
+                >
+                  {t('settings.ai.token.clear')}
+                </button>
+              </div>
+            </div>
+            <div className="sm:col-span-2">
+              <label className="block text-xs font-medium text-gray-500 mb-1">{t('settings.ai.model.label')}</label>
+              <input
+                className="w-full p-2 border rounded-lg text-base"
+                type="text"
+                value={aiModelIdInput}
+                onChange={(e) => setAiModelIdInput(e.target.value)}
+                placeholder={t('settings.ai.model.placeholder')}
+                spellCheck={false}
+                autoCapitalize="off"
+                autoCorrect="off"
+              />
+              <p className="mt-1 text-[11px] text-gray-500">
+                {t('settings.ai.model.help', { defaultModelId: DEFAULT_AI_MODEL_ID })}
+              </p>
+            </div>
+            {aiModels.length > 0 && (
+              <div className="sm:col-span-2">
+                <label className="block text-xs font-medium text-gray-500 mb-1">{t('settings.ai.models.label')}</label>
+                <select
+                  className="w-full p-2 border rounded-lg text-base bg-white"
+                  value={aiModelIdInput}
+                  onChange={(e) => setAiModelIdInput(e.target.value)}
+                >
+                  {aiModels.map((model) => (
+                    <option key={model.id} value={model.id}>
+                      {model.id}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+          </div>
+
+          <div className="space-y-1">
+            <div className="text-xs font-medium text-gray-500 mb-1">{t('settings.ai.tempUnit.label')}</div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                type="button"
+                className={`px-3 py-1.5 rounded-lg text-xs border whitespace-nowrap ${
+                  aiTempUnit === 'C'
+                    ? 'bg-amber-700 text-white border-amber-700'
+                    : 'bg-white border-gray-200 hover:bg-gray-50'
+                }`}
+                onClick={() => {
+                  setAiTempUnit('C');
+                  setAiTempUnitState('C');
+                }}
+              >
+                {t('settings.ai.tempUnit.c')}
+              </button>
+              <button
+                type="button"
+                className={`px-3 py-1.5 rounded-lg text-xs border whitespace-nowrap ${
+                  aiTempUnit === 'F'
+                    ? 'bg-amber-700 text-white border-amber-700'
+                    : 'bg-white border-gray-200 hover:bg-gray-50'
+                }`}
+                onClick={() => {
+                  setAiTempUnit('F');
+                  setAiTempUnitState('F');
+                }}
+              >
+                {t('settings.ai.tempUnit.f')}
+              </button>
+            </div>
+          </div>
+
           <div className="flex items-center gap-2 flex-wrap">
             <button
               type="button"
               className="px-3 py-1.5 rounded-lg bg-amber-700 text-white text-xs hover:bg-amber-800 whitespace-nowrap"
-              onClick={() => {
-                setGeminiApiKey(geminiKeyInput);
-                setGeminiMsg(t('settings.ai.saved'));
-              }}
+              onClick={saveAiSettings}
             >
               {t('settings.ai.save')}
             </button>
             <button
               type="button"
-              className="px-3 py-1.5 rounded-lg border bg-white text-xs hover:bg-gray-50 whitespace-nowrap"
-              onClick={() => {
-                clearGeminiApiKey();
-                setGeminiKeyInput('');
-                setGeminiMsg(t('settings.ai.cleared'));
-              }}
+              className="px-3 py-1.5 rounded-lg border bg-white text-xs hover:bg-gray-50 disabled:bg-gray-100 whitespace-nowrap"
+              onClick={() => void handleAiTestConnection()}
+              disabled={aiTesting}
             >
-              {t('settings.ai.clear')}
+              {aiTesting ? t('settings.ai.health.testing') : t('settings.ai.health.test')}
             </button>
-          </div>
-        </div>
-        <div className="space-y-2">
-          <label className="block text-xs font-medium text-gray-500 mb-1">
-            {t('settings.ai.model.label')}
-          </label>
-          <input
-            className="w-full p-2 border rounded-lg text-base"
-            type="text"
-            value={geminiModelIdInput}
-            onChange={(e) => setGeminiModelIdInput(e.target.value)}
-            placeholder={t('settings.ai.model.placeholder')}
-            spellCheck={false}
-            autoCapitalize="off"
-            autoCorrect="off"
-          />
-          <p className="text-[11px] text-gray-500">
-            {t('settings.ai.model.help', { defaultModelId: DEFAULT_GEMINI_MODEL_ID })}
-          </p>
-          <div className="flex items-center gap-2 flex-wrap">
             <button
               type="button"
-              className="px-3 py-1.5 rounded-lg bg-amber-700 text-white text-xs hover:bg-amber-800 whitespace-nowrap"
-              onClick={() => {
-                setGeminiModelId(geminiModelIdInput);
-                setGeminiModelIdInput(getGeminiModelId());
-                setGeminiMsg(t('settings.ai.model.saved'));
-              }}
+              className="px-3 py-1.5 rounded-lg border bg-white text-xs hover:bg-gray-50 disabled:bg-gray-100 whitespace-nowrap"
+              onClick={() => void handleAiLoadModels()}
+              disabled={aiLoadingModels}
             >
-              {t('settings.ai.model.save')}
+              {aiLoadingModels ? t('settings.ai.models.loading') : t('settings.ai.models.load')}
             </button>
           </div>
-        </div>
-        <div className="space-y-1">
-          <div className="text-xs font-medium text-gray-500 mb-1">{t('settings.ai.tempUnit.label')}</div>
-          <div className="flex items-center gap-2 flex-wrap">
-            <button
-              type="button"
-              className={`px-3 py-1.5 rounded-lg text-xs border whitespace-nowrap ${
-                geminiTempUnit === 'C'
-                  ? 'bg-amber-700 text-white border-amber-700'
-                  : 'bg-white border-gray-200 hover:bg-gray-50'
+
+          {aiMsg && (
+            <p
+              className={`text-xs border rounded-lg p-2 ${
+                aiMsg.tone === 'error'
+                  ? 'text-red-700 bg-red-50 border-red-100'
+                  : 'text-amber-800 bg-amber-50 border-amber-200'
               }`}
-              onClick={() => {
-                setGeminiTempUnit('C');
-                setGeminiTempUnitState('C');
-              }}
             >
-              {t('settings.ai.tempUnit.c')}
-            </button>
-            <button
-              type="button"
-              className={`px-3 py-1.5 rounded-lg text-xs border whitespace-nowrap ${
-                geminiTempUnit === 'F'
-                  ? 'bg-amber-700 text-white border-amber-700'
-                  : 'bg-white border-gray-200 hover:bg-gray-50'
-              }`}
-              onClick={() => {
-                setGeminiTempUnit('F');
-                setGeminiTempUnitState('F');
-              }}
-            >
-              {t('settings.ai.tempUnit.f')}
-            </button>
-          </div>
-        </div>
-        {geminiMsg && <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-2">{geminiMsg}</p>}
-      </section>
+              {aiMsg.text}
+            </p>
+          )}
+        </section>
+      )}
 
       <section className="p-4 border-b border-gray-100 space-y-3">
         <h2 className="text-sm font-semibold text-gray-700 mb-1">{t('settings.labels.title')}</h2>
@@ -349,6 +542,23 @@ export function SettingsPage({
               autoCapitalize="off"
               autoCorrect="off"
             />
+          </div>
+          <div className="sm:col-span-3">
+            <label className="block text-xs font-medium text-gray-500 mb-1">
+              {t('settings.labels.publicBaseUrl.label')}
+            </label>
+            <input
+              className="w-full p-2 border rounded-lg text-base"
+              type="url"
+              value={labelPublicBaseUrlInput}
+              onChange={(e) => setLabelPublicBaseUrlInput(e.target.value)}
+              placeholder={t('settings.labels.publicBaseUrl.placeholder')}
+              spellCheck={false}
+              autoCapitalize="off"
+              autoCorrect="off"
+              inputMode="url"
+            />
+            <p className="mt-1 text-[11px] text-gray-500">{t('settings.labels.publicBaseUrl.help')}</p>
           </div>
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">{t('settings.labels.defaultGrams.label')}</label>
@@ -393,7 +603,17 @@ export function SettingsPage({
         <p className="text-[11px] text-gray-500">
           {supportsNativeLabelPrint ? t('settings.labels.testHelp.native') : t('settings.labels.testHelp.web')}
         </p>
-        {labelMsg && <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-2">{labelMsg}</p>}
+        {labelMsg && (
+          <p
+            className={`text-xs rounded-lg border p-2 whitespace-pre-line ${
+              labelMsg.tone === 'error'
+                ? 'text-red-700 bg-red-50 border-red-100'
+                : 'text-amber-800 bg-amber-50 border-amber-200'
+            }`}
+          >
+            {labelMsg.text}
+          </p>
+        )}
       </section>
 
       {canManageGuestBackup && (

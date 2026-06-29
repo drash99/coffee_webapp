@@ -1,9 +1,14 @@
 import QRCode from 'qrcode';
 
-export async function toQrDataUrl(text: string, sizePx: number): Promise<string> {
+type QrOptions = {
+  errorCorrectionLevel?: 'L' | 'M' | 'Q' | 'H';
+  margin?: number;
+};
+
+export async function toQrDataUrl(text: string, sizePx: number, options?: QrOptions): Promise<string> {
   return await QRCode.toDataURL(text, {
-    errorCorrectionLevel: 'M',
-    margin: 0,
+    errorCorrectionLevel: options?.errorCorrectionLevel ?? 'M',
+    margin: options?.margin ?? 1,
     width: sizePx,
     color: {
       dark: '#000000',
@@ -11,4 +16,3 @@ export async function toQrDataUrl(text: string, sizePx: number): Promise<string>
     },
   });
 }
-

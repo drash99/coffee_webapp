@@ -1,0 +1,48 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="160" y1="120" x2="874" y2="936" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FCF4E7" />
+      <stop offset="1" stop-color="#E8C892" />
+    </linearGradient>
+    <radialGradient id="glow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(506 474) rotate(90) scale(418 366)">
+      <stop stop-color="#F4D7A4" />
+      <stop offset="1" stop-color="#F4D7A4" stop-opacity="0" />
+    </radialGradient>
+    <linearGradient id="bean" x1="364" y1="284" x2="702" y2="746" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#5D3429" />
+      <stop offset="1" stop-color="#341912" />
+    </linearGradient>
+    <filter id="shadow" x="238" y="172" width="558" height="694" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feFlood flood-opacity="0" result="BackgroundImageFix" />
+      <feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha" />
+      <feOffset dy="24" />
+      <feGaussianBlur stdDeviation="28" />
+      <feComposite in2="hardAlpha" operator="out" />
+      <feColorMatrix type="matrix" values="0 0 0 0 0.286275 0 0 0 0 0.164706 0 0 0 0 0.113725 0 0 0 0.28 0" />
+      <feBlend mode="normal" in2="BackgroundImageFix" result="effect1_dropShadow_1_1" />
+      <feBlend mode="normal" in="SourceGraphic" in2="effect1_dropShadow_1_1" result="shape" />
+    </filter>
+  </defs>
+
+  <rect width="1024" height="1024" rx="236" fill="url(#bg)" />
+  <rect x="54" y="54" width="916" height="916" rx="204" stroke="#FFF8EE" stroke-opacity="0.72" stroke-width="16" />
+  <ellipse cx="512" cy="524" rx="308" ry="352" fill="url(#glow)" />
+
+  <g filter="url(#shadow)">
+    <ellipse cx="518" cy="514" rx="228" ry="318" transform="rotate(-10 518 514)" fill="url(#bean)" />
+    <path
+      d="M481.848 285.997C433.909 369.158 423.548 470.952 440.893 564.92C456.68 650.444 495.279 729.645 557.54 792.498"
+      stroke="#8A5536"
+      stroke-linecap="round"
+      stroke-width="70"
+    />
+    <path
+      d="M478.153 288.031C432.278 370.867 423.772 469.911 442.198 561.615C459.29 646.682 497.649 724.776 552.256 784.583"
+      stroke="#EBC394"
+      stroke-linecap="round"
+      stroke-opacity="0.34"
+      stroke-width="22"
+    />
+    <ellipse cx="443.971" cy="383.878" rx="52" ry="30" transform="rotate(-18 443.971 383.878)" fill="#C6946A" fill-opacity="0.16" />
+  </g>
+</svg>

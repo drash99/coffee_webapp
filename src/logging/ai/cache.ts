@@ -1,7 +1,7 @@
 import type { AiBrewPayload } from './serialize';
-import type { AiGuidance } from './geminiClient';
+import type { AiGuidance } from './customServerClient';
 
-const KEY_GUIDANCE_CACHE_PREFIX = 'beanlog.ai.gemini.guidance.';
+const KEY_GUIDANCE_CACHE_PREFIX = 'beanlog.ai.guidance.';
 
 type CachedAiGuidance = {
   signature: string;
@@ -9,8 +9,9 @@ type CachedAiGuidance = {
   savedAt: string;
 };
 
-export function buildAiGuidanceSignature(modelId: string, payload: AiBrewPayload): string {
+export function buildAiGuidanceSignature(serverBaseUrl: string, modelId: string, payload: AiBrewPayload): string {
   return JSON.stringify({
+    serverBaseUrl: serverBaseUrl.trim().toLowerCase(),
     modelId: modelId.trim(),
     payload,
   });

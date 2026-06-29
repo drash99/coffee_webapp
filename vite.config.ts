@@ -23,12 +23,13 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'mask-icon.svg'],
+      includeAssets: ['favicon.png', 'apple-touch-icon.png', 'mask-icon.svg'],
       manifest: {
         name: 'BeanLog - Coffee Science',
         short_name: 'BeanLog',
         description: 'Track your coffee extractions and analyze beans.',
-        theme_color: '#ffffff',
+        theme_color: '#f5e3c4',
+        background_color: '#f5e3c4',
         icons: [
           {
             src: 'pwa-192x192.png',
@@ -39,10 +40,15 @@ export default defineConfig({
             src: 'pwa-512x512.png',
             sizes: '512x512',
             type: 'image/png'
+          },
+          {
+            src: 'pwa-512x512.png',
+            sizes: '512x512',
+            type: 'image/png',
+            purpose: 'maskable'
           }
         ]
       }
     })
   ],
 })
-

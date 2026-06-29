@@ -7,7 +7,7 @@ import { useI18n } from './i18n/I18nProvider';
 import { SharedBrewPage } from './logging/pages/SharedBrewPage';
 import { SettingsPage } from './logging/pages/SettingsPage';
 import { BeanLabelInfoPage } from './logging/pages/BeanLabelInfoPage';
-import { isNative } from './platform';
+import { addAppUrlOpenListener, getLaunchAppUrl, isNative } from './platform';
 import { isSupabaseConfigured } from './config/supabase';
 import type { AppUser } from './auth/types';
 import { getSupabaseClient } from './config/supabase';
@@ -16,7 +16,9 @@ import { isGuestActive, setGuestActive } from './logging/storage';
 
 const GUEST_USER: AppUser = { uid: 'guest', id: 'Guest' };
 
-function parseSharedTokenFromLocation(loc: Location): string | null {
+type RouteLocation = Pick<Location, 'pathname' | 'search' | 'hash'>;
+
+function parseSharedTokenFromLocation(loc: RouteLocation): string | null {
   const fromQuery = new URLSearchParams(loc.search).get('share')?.trim() ?? '';
   if (fromQuery) return fromQuery;
 
@@ -27,12 +29,18 @@ function parseSharedTokenFromLocation(loc: Location): string | null {
   return m?.[1] ?? null;
 }
 
-function parseLabelUidFromLocation(loc: Location): string | null {
-  const m = loc.pathname.match(/^\/label\/([^/]+)\/?$/);
+function parseLabelUidFromLocation(loc: RouteLocation): string | null {
+  const fromQuery = new URLSearchParams(loc.search).get('label')?.trim() ?? '';
+  if (fromQuery) return fromQuery;
+
+  const fromHash = new URLSearchParams(loc.hash.startsWith('#') ? loc.hash.slice(1) : loc.hash).get('label')?.trim() ?? '';
+  if (fromHash) return fromHash;
+
+  const m = loc.pathname.match(/^\/(?:label|l)\/([^/]+)\/?$/);
   return m?.[1] ?? null;
 }
 
-function parseDeepLinkParams(loc: Location): {
+function parseDeepLinkParams(loc: RouteLocation): {
   beanUid: string | null;
   historyBeanUid: string | null;
   duplicateBrewUid: string | null;
@@ -44,6 +52,23 @@ function parseDeepLinkParams(loc: Location): {
   const duplicateBrewUid = (q.get('duplicateBrew') ?? '').trim() || null;
   const doseG = (q.get('doseG') ?? '').trim() || null;
   return { beanUid, historyBeanUid, duplicateBrewUid, doseG };
+}
+
+function parseRouteLocationFromUrl(urlString: string): RouteLocation | null {
+  try {
+    const url = new URL(urlString);
+    const pathname =
+      url.protocol === 'http:' || url.protocol === 'https:'
+        ? url.pathname
+        : `${url.host ? `/${url.host}` : ''}${url.pathname || ''}` || '/';
+    return {
+      pathname,
+      search: url.search,
+      hash: url.hash,
+    };
+  } catch {
+    return null;
+  }
 }
 
 function App() {
@@ -122,6 +147,39 @@ function App() {
     window.addEventListener('popstate', onPopState);
     return () => {
       window.removeEventListener('popstate', onPopState);
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    let cleanup = () => {};
+
+    function applyIncomingUrl(urlString: string) {
+      const loc = parseRouteLocationFromUrl(urlString);
+      if (!loc) return;
+      setSharedToken(parseSharedTokenFromLocation(loc));
+      setLabelUid(parseLabelUidFromLocation(loc));
+      setDeepLink(parseDeepLinkParams(loc));
+    }
+
+    void getLaunchAppUrl().then((url) => {
+      if (!active || !url) return;
+      applyIncomingUrl(url);
+    });
+
+    void addAppUrlOpenListener((url) => {
+      applyIncomingUrl(url);
+    }).then((remove) => {
+      if (!active) {
+        remove();
+        return;
+      }
+      cleanup = remove;
+    });
+
+    return () => {
+      active = false;
+      cleanup();
     };
   }, []);
 

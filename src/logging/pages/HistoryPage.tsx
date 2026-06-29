@@ -11,10 +11,12 @@ import { useGrinderSuggestions } from '../hooks/useGrinderSuggestions';
 import { toNullableNumber, fmtDate, isoToYmd, unique } from '../utils/formatting';
 import { beanDisplayLabel } from '../utils/beanLabel';
 import { downloadBrewAsPng } from '../utils/brewPng';
-import { getGeminiApiKey, getGeminiModelId, getGeminiTempUnit } from '../ai/prefs';
+import { buildPublicBrewShareUrl } from '../utils/publicLinks';
+import { getPlatform } from '../../platform';
+import { getAiServerBaseUrl, getAiServerConfig, getAiModelId, getAiTempUnit } from '../ai/prefs';
 import { buildAiGuidanceSignature, getCachedBrewGuidance, setCachedBrewGuidance } from '../ai/cache';
 import { serializeBrewForAi, type AiBeanSummary, type AiBrewSummary } from '../ai/serialize';
-import { requestBrewGuidance, type AiGuidance } from '../ai/geminiClient';
+import { requestBrewGuidance, type AiGuidance } from '../ai/customServerClient';
 import {
   localListBrewsWithBeans,
   localListBeans,
@@ -133,6 +135,7 @@ function navigate(url: string) {
 
 export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
   const { t, lang } = useI18n();
+  const aiEnabled = getPlatform() === 'ios';
   const [rows, setRows] = useState<BrewWithBean[]>([]);
   const [savedBeans, setSavedBeans] = useState<SavedBeanOption[]>([]);
   const [loading, setLoading] = useState(false);
@@ -397,29 +400,31 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
       .map(toAiBrewSummary);
     const prefs = {
       language: lang,
-      tempUnit: getGeminiTempUnit(),
+      tempUnit: getAiTempUnit(),
     };
     const payload = serializeBrewForAi(current, sameBean, prefs);
-    const modelId = getGeminiModelId();
-    const signature = buildAiGuidanceSignature(modelId, payload);
+    const modelId = getAiModelId();
+    let serverBaseUrl = 'invalid://ai-server';
+    try {
+      serverBaseUrl = getAiServerBaseUrl();
+    } catch {
+      // Keep cache lookup deterministic even if the saved server config is invalid.
+    }
+    const signature = buildAiGuidanceSignature(serverBaseUrl, modelId, payload);
     return { modelId, payload, signature };
   }
 
   async function requestAiForSelected() {
     if (!selected) return;
+    if (!aiEnabled) return;
     setAiError(null);
     setAiGuidance(null);
     setAiCopiedMsg(null);
     setAiIsCached(false);
-    const apiKey = getGeminiApiKey();
-    if (!apiKey) {
-      setAiError(t('history.ai.noKey'));
-      return;
-    }
     setAiLoading(true);
     try {
-      const { modelId, payload, signature } = buildAiRequestContext(selected);
-      const guidance = await requestBrewGuidance(apiKey, modelId, payload);
+      const { payload, signature } = buildAiRequestContext(selected);
+      const guidance = await requestBrewGuidance(getAiServerConfig(), payload);
       setCachedBrewGuidance(selected.uid, signature, guidance);
       setAiGuidance(guidance);
       setAiIsCached(false);
@@ -574,7 +579,7 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
         if (upsertErr) throw new Error(upsertErr.message);
       }
 
-      const url = `${window.location.origin}/?share=${encodeURIComponent(token)}`;
+      const url = buildPublicBrewShareUrl(token);
       setShareUrl(url);
 
       try {
@@ -707,7 +712,7 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
   }, [selectedUid]);
 
   useEffect(() => {
-    if (!selected) {
+    if (!selected || !aiEnabled) {
       setAiGuidance(null);
       setAiIsCached(false);
       return;
@@ -716,7 +721,7 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
     const cached = getCachedBrewGuidance(selected.uid, signature);
     setAiGuidance(cached);
     setAiIsCached(Boolean(cached));
-  }, [selected, rows, lang]);
+  }, [selected, rows, lang, aiEnabled]);
 
   // -----------------------------------------------------------------------
   // Render
@@ -907,7 +912,7 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
           <div className="px-4 py-3 border-b bg-gray-50 text-sm font-medium text-gray-700 flex items-center justify-between gap-3">
             <span>{t('history.detail.title')}</span>
-            {selected && !isEditing && (
+            {selected && !isEditing && aiEnabled && (
               <button
                 type="button"
                 className="px-3 py-1.5 rounded-lg border bg-white text-xs hover:bg-gray-50 disabled:bg-gray-100 whitespace-nowrap"

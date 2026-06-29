@@ -22,6 +22,17 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.beanlog.app</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>beanlog</string>
+			</array>
+		</dict>
+	</array>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>UILaunchStoryboardName</key>
@@ -48,13 +59,22 @@
 	<string>BeanLog uses Bluetooth to connect to your Brother label printer.</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>
 	<string>BeanLog uses Bluetooth to connect to your Brother label printer.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>BeanLog can connect to your local AI server for brew guidance.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>BeanLog needs photo library access to select images of beans and grind samples for analysis.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>BeanLog can save analysis images to your photo library.</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+		<key>NSAllowsArbitraryLoadsInWebContent</key>
+		<true/>
+	</dict>
 	<key>UISupportedExternalAccessoryProtocols</key>
 	<array>
-		<string>com.issc.datapath</string>
+		<string>com.brother.ptcbp</string>
 	</array>
 </dict>
 </plist>
