@@ -902,7 +902,7 @@ export function NewBrewPage({
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">{t('beanImport.json.label')}</label>
             <textarea
-              className="w-full p-2 border rounded-lg min-h-24 bg-white font-mono text-xs"
+              className="w-full p-2 border rounded-lg min-h-24 bg-white font-mono text-base"
               value={beanImportJson}
               onChange={(e) => {
                 setBeanImportJson(e.target.value);
