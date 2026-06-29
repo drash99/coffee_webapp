@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { ClipboardCopy, ClipboardPaste, FileJson } from 'lucide-react';
 import type { AppUser } from '../../auth/types';
 import { getSupabaseClient } from '../../config/supabase';
 import { FlavorWheelPicker } from '../components/FlavorWheelPicker';
@@ -9,6 +10,7 @@ import { useBeanSuggestions } from '../hooks/useBeanSuggestions';
 import { toNullableNumber, todayYMD, fToC, fmtDate } from '../utils/formatting';
 import { unique } from '../utils/formatting';
 import { beanDisplayLabel } from '../utils/beanLabel';
+import { buildBeanImportPrompt, parseBeanImportJson } from '../utils/beanJsonImport';
 import type { BeanInput, BrewInput, FlavorNote, GrinderInput } from '../types';
 import { useI18n } from '../../i18n/I18nProvider';
 import {
@@ -96,6 +98,8 @@ export function NewBrewPage({
   const [selectedBeanUid, setSelectedBeanUid] = useState('');
   const [beanSaving, setBeanSaving] = useState(false);
   const [beanMsg, setBeanMsg] = useState<string | null>(null);
+  const [beanImportJson, setBeanImportJson] = useState('');
+  const [beanImportMsg, setBeanImportMsg] = useState<string | null>(null);
 
   const [grinder, setGrinder] = useState<GrinderInput>({
     maker: '',
@@ -258,6 +262,7 @@ export function NewBrewPage({
   const modelsForMaker = isGuest
     ? (m: string) => guestGrinderSugg?.modelsForMaker(m) ?? []
     : hookGrinderSugg.modelsForMaker;
+  const beanImportPrompt = useMemo(() => buildBeanImportPrompt(savedBeans), [savedBeans]);
 
   const brewDateIso = useMemo(() => {
     try {
@@ -551,6 +556,54 @@ export function NewBrewPage({
     };
   }
 
+  async function copyBeanImportPrompt() {
+    setBeanImportMsg(null);
+    try {
+      await navigator.clipboard.writeText(beanImportPrompt);
+      setBeanImportMsg(t('beanImport.prompt.copied'));
+    } catch {
+      setBeanImportMsg(t('beanImport.prompt.copyFailed'));
+    }
+  }
+
+  function applyBeanImport(raw: string) {
+    const nextBean = parseBeanImportJson(raw);
+    setBean(nextBean);
+    setSelectedBeanUid('');
+    setPresetMsg(null);
+    setBeanMsg(null);
+    setBeanImportJson(raw);
+    setBeanImportMsg(t('beanImport.imported'));
+  }
+
+  function importBeanJsonFromText() {
+    setBeanImportMsg(null);
+    if (!beanImportJson.trim()) {
+      setBeanImportMsg(t('beanImport.error.empty'));
+      return;
+    }
+
+    try {
+      applyBeanImport(beanImportJson);
+    } catch {
+      setBeanImportMsg(t('beanImport.error.invalid'));
+    }
+  }
+
+  async function importBeanJsonFromClipboard() {
+    setBeanImportMsg(null);
+    try {
+      const raw = await navigator.clipboard.readText();
+      if (!raw.trim()) {
+        setBeanImportMsg(t('beanImport.error.empty'));
+        return;
+      }
+      applyBeanImport(raw);
+    } catch {
+      setBeanImportMsg(t('beanImport.error.clipboardRead'));
+    }
+  }
+
   // -----------------------------------------------------------------------
   // Resolve bean UID for brew save
   // -----------------------------------------------------------------------
@@ -829,6 +882,58 @@ export function NewBrewPage({
             ) : null}
           </div>
         )}
+
+        <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 space-y-3">
+          <div className="flex items-start justify-between gap-3 flex-wrap">
+            <div className="min-w-0">
+              <div className="text-sm font-semibold text-gray-800">{t('beanImport.title')}</div>
+              <div className="text-xs text-gray-500">{t('beanImport.description')}</div>
+            </div>
+            <button
+              type="button"
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border bg-white text-sm hover:bg-gray-50 whitespace-nowrap"
+              onClick={copyBeanImportPrompt}
+            >
+              <ClipboardCopy className="w-4 h-4" aria-hidden="true" />
+              {t('beanImport.prompt.copy')}
+            </button>
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">{t('beanImport.json.label')}</label>
+            <textarea
+              className="w-full p-2 border rounded-lg min-h-24 bg-white font-mono text-xs"
+              value={beanImportJson}
+              onChange={(e) => {
+                setBeanImportJson(e.target.value);
+                setBeanImportMsg(null);
+              }}
+              placeholder={t('beanImport.json.placeholder')}
+              spellCheck={false}
+            />
+          </div>
+
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              type="button"
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-amber-700 text-white text-sm hover:bg-amber-800 whitespace-nowrap"
+              onClick={importBeanJsonFromClipboard}
+            >
+              <ClipboardPaste className="w-4 h-4" aria-hidden="true" />
+              {t('beanImport.clipboardImport')}
+            </button>
+            <button
+              type="button"
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border bg-white text-sm hover:bg-gray-50 whitespace-nowrap"
+              onClick={importBeanJsonFromText}
+            >
+              <FileJson className="w-4 h-4" aria-hidden="true" />
+              {t('beanImport.textImport')}
+            </button>
+          </div>
+
+          {beanImportMsg && <div className="text-xs text-gray-600">{beanImportMsg}</div>}
+        </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div className="sm:col-span-2">
