@@ -221,8 +221,9 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
 
     const grinderMakers = unique(rows.map(r => (r.grinders?.maker ?? '').trim()));
     const grinderModels = unique(rows.map(r => (r.grinders?.model ?? '').trim()));
+    const recipes = unique(rows.map(r => (r.recipe ?? '').trim()));
 
-    return { roasteries, countries, locations, producers, varietals, grinderMakers, grinderModels };
+    return { roasteries, countries, locations, producers, varietals, grinderMakers, grinderModels, recipes };
   }, [rows]);
 
   // --- Apply filters ---
@@ -1327,10 +1328,13 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
                     </div>
                     <div className="sm:col-span-2">
                       <label className="block text-xs text-gray-500 mb-1">{t('brew.field.recipe')}</label>
-                      <textarea
-                        className="w-full p-2 border rounded-lg min-h-24"
+                      <AutocompleteInput
+                        multiline
+                        rows={4}
+                        className="min-h-24"
                         value={editDraft.recipe}
-                        onChange={(e) => setEditDraft({ ...editDraft, recipe: e.target.value })}
+                        onChange={(v) => setEditDraft({ ...editDraft, recipe: v })}
+                        suggestions={suggestions.recipes}
                       />
                     </div>
                   </div>

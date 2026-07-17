@@ -7,6 +7,7 @@ import { StarRating } from '../components/StarRating';
 import { AutocompleteInput } from '../components/AutocompleteInput';
 import { useGrinderSuggestions } from '../hooks/useGrinderSuggestions';
 import { useBeanSuggestions } from '../hooks/useBeanSuggestions';
+import { useRecipeSuggestions } from '../hooks/useRecipeSuggestions';
 import { toNullableNumber, todayYMD, fToC, fmtDate } from '../utils/formatting';
 import { unique } from '../utils/formatting';
 import { beanDisplayLabel } from '../utils/beanLabel';
@@ -137,6 +138,7 @@ export function NewBrewPage({
   const [presetMsg, setPresetMsg] = useState<string | null>(null);
   const [recentBeanBrew, setRecentBeanBrew] = useState<BrewTemplateRow | null>(null);
   const [recentBrewLoading, setRecentBrewLoading] = useState(false);
+  const [recipeSuggestionsRefreshKey, setRecipeSuggestionsRefreshKey] = useState(0);
   const appliedInitialBeanUidRef = useRef<string | null>(null);
   const appliedInitialDoseRef = useRef<string | null>(null);
   const appliedDuplicateBrewUidRef = useRef<string | null>(null);
@@ -144,6 +146,7 @@ export function NewBrewPage({
   // --- Suggestions: hooks for Supabase, inline derivation for guest ---
   const hookBeanSugg = useBeanSuggestions(isGuest ? undefined : user.uid);
   const hookGrinderSugg = useGrinderSuggestions(isGuest ? undefined : user.uid);
+  const hookRecipeSugg = useRecipeSuggestions(isGuest ? undefined : user.uid, recipeSuggestionsRefreshKey);
 
   function applySavedBeanDetails(source: SavedBeanOption) {
     setSelectedBeanUid(source.uid);
@@ -248,6 +251,11 @@ export function NewBrewPage({
     };
   }, [isGuest]);
 
+  const guestRecipeSuggestions = useMemo(() => {
+    if (!isGuest) return [];
+    return unique(localListBrewsWithBeans().map((row) => (row.recipe ?? '').trim()));
+  }, [isGuest, recipeSuggestionsRefreshKey]);
+
   // Unified suggestion accessors
   const roasteries = isGuest ? (guestBeanSugg?.roasteries ?? []) : hookBeanSugg.roasteries;
   const countries = isGuest ? (guestBeanSugg?.countries ?? []) : hookBeanSugg.countries;
@@ -262,6 +270,7 @@ export function NewBrewPage({
   const modelsForMaker = isGuest
     ? (m: string) => guestGrinderSugg?.modelsForMaker(m) ?? []
     : hookGrinderSugg.modelsForMaker;
+  const recipeSuggestions = isGuest ? guestRecipeSuggestions : hookRecipeSugg.recipes;
   const beanImportPrompt = useMemo(() => buildBeanImportPrompt(savedBeans), [savedBeans]);
 
   const brewDateIso = useMemo(() => {
@@ -775,6 +784,7 @@ export function NewBrewPage({
       }
 
       setOk(t('newBrew.saved'));
+      setRecipeSuggestionsRefreshKey((v) => v + 1);
       await loadSavedBeans();
       // Keep brew date and selected bean, clear brew-centric fields for convenience
       if (!selectedBeanUid) {
@@ -1205,10 +1215,13 @@ export function NewBrewPage({
 
         <div>
           <label className="block text-xs font-medium text-gray-500 mb-1">{t('brew.field.recipe')}</label>
-          <textarea
-            className="w-full p-2 border rounded-lg min-h-24"
+          <AutocompleteInput
+            multiline
+            rows={4}
+            className="min-h-24"
             value={brew.recipe}
-            onChange={(e) => setBrew({ ...brew, recipe: e.target.value })}
+            onChange={(v) => setBrew({ ...brew, recipe: v })}
+            suggestions={recipeSuggestions}
             placeholder={t('brew.placeholder.recipe')}
           />
         </div>

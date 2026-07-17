@@ -7,6 +7,8 @@ interface AutocompleteInputProps {
   placeholder?: string;
   className?: string;
   disabled?: boolean;
+  multiline?: boolean;
+  rows?: number;
 }
 
 /**
@@ -20,6 +22,8 @@ export function AutocompleteInput({
   placeholder,
   className = '',
   disabled = false,
+  multiline = false,
+  rows = 3,
 }: AutocompleteInputProps) {
   const [open, setOpen] = useState(false);
   const [highlightIdx, setHighlightIdx] = useState(-1);
@@ -80,8 +84,8 @@ export function AutocompleteInput({
         setHighlightIdx((prev) => (prev <= 0 ? filtered.length - 1 : prev - 1));
         break;
       case 'Enter':
-        e.preventDefault();
         if (highlightIdx >= 0 && highlightIdx < filtered.length) {
+          e.preventDefault();
           select(filtered[highlightIdx]);
         }
         break;
@@ -95,22 +99,40 @@ export function AutocompleteInput({
 
   return (
     <div ref={wrapperRef} className="relative">
-      <input
-        type="text"
-        className={`w-full p-2 border rounded-lg ${className}`}
-        value={value}
-        onChange={(e) => {
-          onChange(e.target.value);
-          setOpen(true);
-        }}
-        onFocus={() => {
-          if (filtered.length > 0) setOpen(true);
-        }}
-        onKeyDown={handleKeyDown}
-        placeholder={placeholder}
-        disabled={disabled}
-        autoComplete="off"
-      />
+      {multiline ? (
+        <textarea
+          className={`w-full p-2 border rounded-lg ${className}`}
+          value={value}
+          onChange={(e) => {
+            onChange(e.target.value);
+            setOpen(true);
+          }}
+          onFocus={() => {
+            if (filtered.length > 0) setOpen(true);
+          }}
+          onKeyDown={handleKeyDown}
+          placeholder={placeholder}
+          disabled={disabled}
+          rows={rows}
+        />
+      ) : (
+        <input
+          type="text"
+          className={`w-full p-2 border rounded-lg ${className}`}
+          value={value}
+          onChange={(e) => {
+            onChange(e.target.value);
+            setOpen(true);
+          }}
+          onFocus={() => {
+            if (filtered.length > 0) setOpen(true);
+          }}
+          onKeyDown={handleKeyDown}
+          placeholder={placeholder}
+          disabled={disabled}
+          autoComplete="off"
+        />
+      )}
       {showDropdown && (
         <ul
           ref={listRef}
@@ -119,7 +141,7 @@ export function AutocompleteInput({
           {filtered.map((item, idx) => (
             <li
               key={item}
-              className={`px-3 py-2 text-sm cursor-pointer ${
+              className={`px-3 py-2 text-sm cursor-pointer whitespace-pre-wrap break-words ${
                 idx === highlightIdx
                   ? 'bg-amber-100 text-amber-900'
                   : 'hover:bg-gray-50 text-gray-800'
