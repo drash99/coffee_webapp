@@ -1,22 +1,101 @@
 import QRCode from 'qrcode';
 
-type RenderBeanLabelOptions = {
+export type BeanLabelContent = {
   roasteryText: string | null;
   beanName: string;
-  originText: string | null;
-  producerProcessText: string | null;
-  varietalText: string | null;
+  details: Array<{ label: string; value: string }>;
   footerText: string;
+};
+
+type RenderBeanLabelOptions = BeanLabelContent & {
   qrDataUrl: string;
   qrText?: string | null;
 };
 
-const PRINT_LABEL_LENGTH_DOTS = 300;
-const PRINT_LABEL_HEIGHT_DOTS = 128;
+export const BEAN_LABEL_DIMENSIONS = {
+  lengthDots: 300,
+  heightDots: 128,
+  dpi: 180,
+  tapeWidthMm: 24,
+  maxLengthMm: 100,
+} as const;
+
+export type BeanLabelImages = {
+  printDataUrl: string;
+  previewDataUrl: string;
+  lengthDots: number;
+};
 const LABEL_FONT_14 = '"Galmuri14", sans-serif';
 const LABEL_FONT_11 = '"Galmuri11", sans-serif';
 const LABEL_FONT_9 = '"Galmuri9", sans-serif';
 let labelFontsReady: Promise<void> | null = null;
+const graphemeSegmenter = typeof Intl.Segmenter === 'function'
+  ? new Intl.Segmenter(undefined, { granularity: 'grapheme' }) : null;
+
+export class BeanLabelLayoutError extends Error {
+  constructor() {
+    super('LABEL_TOO_LONG');
+    this.name = 'BeanLabelLayoutError';
+  }
+}
+
+type LabelTextLine = { text: string; font: string; x: number; y: number };
+type LabelLayout = {
+  lengthDots: number;
+  bodyLines: LabelTextLine[];
+  footer: LabelTextLine;
+  qr: { x: number; y: number; size: number };
+};
+type MeasureLabelText = (text: string, font: string) => number;
+
+export function planBeanLabelLayout(content: BeanLabelContent, measure: MeasureLabelText): LabelLayout {
+  const padding = 8;
+  const qrSize = 90;
+  const gap = 8;
+  const footerFont = `400 10px ${LABEL_FONT_9}`;
+  const footerY = BEAN_LABEL_DIMENSIONS.heightDots - 4 - 10;
+  const bodyHeight = footerY - padding - 4;
+  const blocks = [
+    ...(content.roasteryText?.trim() ? [{ text: content.roasteryText, font: `400 12px ${LABEL_FONT_11}`, lineHeight: 14 }] : []),
+    { text: content.beanName.trim() || '-', font: `400 15px ${LABEL_FONT_14}`, lineHeight: 18 },
+    ...content.details.filter(detail => detail.value.trim()).map(detail => ({
+      text: detail.label.trim() ? `${detail.label.trim()}: ${detail.value}` : detail.value,
+      font: `400 12px ${LABEL_FONT_11}`,
+      lineHeight: 13,
+    })),
+  ];
+
+  function atLength(lengthDots: number) {
+    const textWidth = lengthDots - padding * 2 - qrSize - gap;
+    const bodyLines: LabelTextLine[] = [];
+    let y = padding;
+    for (const block of blocks) {
+      for (const text of wrapText(block.text, textWidth, value => measure(value, block.font))) {
+        bodyLines.push({ text, font: block.font, x: padding, y });
+        y += block.lineHeight;
+      }
+    }
+    return {
+      fits: y - padding <= bodyHeight &&
+        bodyLines.every(line => measure(line.text, line.font) <= textWidth) &&
+        measure(content.footerText, footerFont) <= lengthDots - padding * 2,
+      lengthDots,
+      bodyLines,
+      footer: { text: content.footerText, font: footerFont, x: padding, y: footerY },
+      qr: { x: lengthDots - padding - qrSize, y: padding + Math.floor((bodyHeight - qrSize) / 2), size: qrSize },
+    };
+  }
+
+  let low = BEAN_LABEL_DIMENSIONS.lengthDots as number;
+  let high = Math.floor(BEAN_LABEL_DIMENSIONS.maxLengthMm * BEAN_LABEL_DIMENSIONS.dpi / 25.4);
+  if (!atLength(high).fits) throw new BeanLabelLayoutError();
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (atLength(middle).fits) high = middle;
+    else low = middle + 1;
+  }
+  return atLength(low);
+}
 
 async function loadImage(src: string): Promise<HTMLImageElement> {
   return await new Promise((resolve, reject) => {
@@ -34,135 +113,56 @@ function createCanvas(width: number, height: number): HTMLCanvasElement {
   return canvas;
 }
 
-export async function renderBeanLabelDataUrl({
+export async function renderBeanLabelDataUrl(options: RenderBeanLabelOptions): Promise<string> {
+  return (await renderBeanLabelImages(options)).printDataUrl;
+}
+
+export async function renderBeanLabelImages({
   roasteryText,
   beanName,
-  originText,
-  producerProcessText,
-  varietalText,
+  details,
   footerText,
   qrDataUrl,
   qrText,
-}: RenderBeanLabelOptions): Promise<string> {
+}: RenderBeanLabelOptions): Promise<BeanLabelImages> {
   await ensureLabelFontsLoaded();
   const qrImage = qrText ? null : await loadImage(qrDataUrl);
-  const portraitCanvas = createCanvas(PRINT_LABEL_HEIGHT_DOTS, PRINT_LABEL_LENGTH_DOTS);
-  const portraitCtx = portraitCanvas.getContext('2d');
-  if (!portraitCtx) {
+  const landscapeCanvas = createCanvas(BEAN_LABEL_DIMENSIONS.lengthDots, BEAN_LABEL_DIMENSIONS.heightDots);
+  const landscapeCtx = landscapeCanvas.getContext('2d');
+  if (!landscapeCtx) {
     throw new Error('Canvas is not available');
   }
 
-  portraitCtx.fillStyle = '#ffffff';
-  portraitCtx.fillRect(0, 0, portraitCanvas.width, portraitCanvas.height);
+  const layout = planBeanLabelLayout({ roasteryText, beanName, details, footerText }, (text, font) => {
+    landscapeCtx.font = font;
+    return landscapeCtx.measureText(text).width;
+  });
+  landscapeCanvas.width = layout.lengthDots;
+  landscapeCtx.fillStyle = '#ffffff';
+  landscapeCtx.fillRect(0, 0, landscapeCanvas.width, landscapeCanvas.height);
+  landscapeCtx.fillStyle = '#000000';
+  landscapeCtx.textBaseline = 'top';
+  for (const line of [...layout.bodyLines, layout.footer]) {
+    landscapeCtx.font = line.font;
+    landscapeCtx.fillText(line.text, line.x, line.y);
+  }
+  drawQrCode(landscapeCtx, { qrImage, qrText: qrText ?? null, ...layout.qr });
+  thresholdCanvas(landscapeCtx, landscapeCanvas.width, landscapeCanvas.height);
+
+  // The SDK feeds the portrait image; preview the same pixels in reading orientation.
+  const portraitCanvas = createCanvas(landscapeCanvas.height, landscapeCanvas.width);
+  const portraitCtx = portraitCanvas.getContext('2d');
+  if (!portraitCtx) throw new Error('Canvas is not available');
   portraitCtx.imageSmoothingEnabled = false;
-  portraitCtx.save();
   portraitCtx.translate(portraitCanvas.width, 0);
   portraitCtx.rotate(Math.PI / 2);
-  drawLandscapeLabel(portraitCtx, {
-    width: PRINT_LABEL_LENGTH_DOTS,
-    height: PRINT_LABEL_HEIGHT_DOTS,
-    roasteryText,
-    beanName,
-    originText,
-    producerProcessText,
-    varietalText,
-    footerText,
-    qrImage,
-    qrText: qrText ?? null,
-  });
-  portraitCtx.restore();
-  thresholdCanvas(portraitCtx, portraitCanvas.width, portraitCanvas.height);
+  portraitCtx.drawImage(landscapeCanvas, 0, 0);
 
-  return portraitCanvas.toDataURL('image/png');
-}
-
-function drawLandscapeLabel(
-  ctx: CanvasRenderingContext2D,
-  options: Omit<RenderBeanLabelOptions, 'qrDataUrl'> & {
-    width: number;
-    height: number;
-    qrImage: HTMLImageElement | null;
-  },
-) {
-  const {
-    width,
-    height,
-    roasteryText,
-    beanName,
-    originText,
-    producerProcessText,
-    varietalText,
-    footerText,
-    qrImage,
-    qrText,
-  } = options;
-
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(0, 0, width, height);
-  ctx.textBaseline = 'top';
-  ctx.imageSmoothingEnabled = false;
-
-  const paddingX = 8;
-  const paddingY = 8;
-  const qrSize = 90;
-  const gap = 8;
-  const qrX = width - paddingX - qrSize;
-  const qrY = Math.round((height - qrSize) / 2);
-  const textWidth = qrX - paddingX - gap;
-
-  let lineY = paddingY;
-
-  if (roasteryText) {
-    ctx.fillStyle = '#000000';
-    ctx.font = `400 12px ${LABEL_FONT_11}`;
-    for (const line of wrapText(ctx, roasteryText, textWidth, 1)) {
-      ctx.fillText(line, paddingX, lineY);
-      lineY += 14;
-    }
-  }
-
-  ctx.fillStyle = '#000000';
-  ctx.font = `400 15px ${LABEL_FONT_14}`;
-  for (const line of wrapText(ctx, beanName || '-', textWidth, 2)) {
-    ctx.fillText(line, paddingX, lineY);
-    lineY += 18;
-  }
-
-  if (originText) {
-    ctx.fillStyle = '#000000';
-    ctx.font = `400 12px ${LABEL_FONT_11}`;
-    for (const line of wrapText(ctx, originText, textWidth, 1)) {
-      ctx.fillText(line, paddingX, lineY);
-      lineY += 14;
-    }
-  }
-
-  if (producerProcessText) {
-    ctx.fillStyle = '#000000';
-    ctx.font = `400 12px ${LABEL_FONT_11}`;
-    for (const line of wrapText(ctx, producerProcessText, textWidth, 1)) {
-      ctx.fillText(line, paddingX, lineY);
-      lineY += 13;
-    }
-  }
-
-  if (varietalText) {
-    ctx.fillStyle = '#000000';
-    ctx.font = `400 10px ${LABEL_FONT_9}`;
-    for (const line of wrapText(ctx, varietalText, textWidth, 1)) {
-      ctx.fillText(line, paddingX, lineY);
-      lineY += 12;
-    }
-  }
-
-  ctx.fillStyle = '#000000';
-  ctx.font = `400 10px ${LABEL_FONT_9}`;
-  for (const line of wrapText(ctx, footerText, textWidth, 1)) {
-    ctx.fillText(line, paddingX, lineY);
-    lineY += 12;
-  }
-
-  drawQrCode(ctx, { qrImage, qrText: qrText ?? null, x: qrX, y: qrY, size: qrSize });
+  return {
+    printDataUrl: portraitCanvas.toDataURL('image/png'),
+    previewDataUrl: landscapeCanvas.toDataURL('image/png'),
+    lengthDots: layout.lengthDots,
+  };
 }
 
 function thresholdCanvas(ctx: CanvasRenderingContext2D, width: number, height: number) {
@@ -228,36 +228,32 @@ function drawQrCode(
 }
 
 function wrapText(
-  ctx: CanvasRenderingContext2D,
   text: string,
   maxWidth: number,
-  maxLines: number,
+  measure: (text: string) => number,
 ): string[] {
-  const words = text.trim().split(/\s+/).filter(Boolean);
-  if (words.length === 0) return ['-'];
-
   const lines: string[] = [];
-  const remaining = [...words];
-
-  while (remaining.length > 0 && lines.length < maxLines) {
-    let line = remaining.shift() || '';
-
-    while (remaining.length > 0) {
-      const candidate = `${line} ${remaining[0]}`;
-      if (ctx.measureText(candidate).width > maxWidth) break;
-      line = candidate;
-      remaining.shift();
+  for (const paragraph of text.trim().split(/\r\n|\r|\n/)) {
+    let line = '';
+    for (const word of paragraph.trim().split(/\s+/).filter(Boolean)) {
+      if (measure(line ? `${line} ${word}` : word) <= maxWidth) {
+        line = line ? `${line} ${word}` : word;
+        continue;
+      }
+      if (line) lines.push(line);
+      line = '';
+      const characters = graphemeSegmenter
+        ? Array.from(graphemeSegmenter.segment(word), part => part.segment) : Array.from(word);
+      for (const character of characters) {
+        if (line && measure(line + character) > maxWidth) {
+          lines.push(line);
+          line = '';
+        }
+        line += character;
+      }
     }
-
-    if (lines.length === maxLines - 1 && remaining.length > 0) {
-      line = ellipsizeText(ctx, `${line} ${remaining.join(' ')}`.trim(), maxWidth);
-      lines.push(line);
-      break;
-    }
-
-    lines.push(ellipsizeText(ctx, line, maxWidth));
+    if (line) lines.push(line);
   }
-
   return lines;
 }
 
@@ -272,13 +268,4 @@ async function ensureLabelFontsLoaded(): Promise<void> {
     ]).then(() => undefined);
   }
   await labelFontsReady;
-}
-
-function ellipsizeText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string {
-  if (ctx.measureText(text).width <= maxWidth) return text;
-  let next = text;
-  while (next.length > 1 && ctx.measureText(`${next}...`).width > maxWidth) {
-    next = next.slice(0, -1).trimEnd();
-  }
-  return `${next}...`;
 }

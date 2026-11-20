@@ -1,4 +1,8 @@
+export type BeverageType = 'coffee' | 'tea' | 'wine';
+export type BeverageDetails = Record<string, string | number>;
+
 export type BeanInput = {
+  beverage_type?: BeverageType;
   bean_name: string;
   roastery: string;
   producer: string;
@@ -38,6 +42,8 @@ export type BrewInput = {
 };
 
 export type BeanRow = {
+  beverage_type?: BeverageType;
+  beverage_details?: BeverageDetails;
   uid: string;
   user_uid: string;
   bean_name: string | null;
@@ -62,6 +68,7 @@ export type GrinderRow = {
 };
 
 export type BrewRow = {
+  beverage_details?: BeverageDetails;
   uid: string;
   user_uid: string;
   brew_date: string;

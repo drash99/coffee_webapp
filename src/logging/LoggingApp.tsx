@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import { Coffee, History, PlusCircle } from 'lucide-react';
-import { isSupabaseConfigured } from '../config/supabase';
+import { Coffee, History, Leaf, PlusCircle, Wine } from 'lucide-react';
+import { getSupabaseClient, isSupabaseConfigured } from '../config/supabase';
 import type { AppUser } from '../auth/types';
 import { TabButton } from './components/TabButton';
 import { LoginPage } from './pages/LoginPage';
@@ -8,11 +8,17 @@ import { SignupPage } from './pages/SignupPage';
 import { NewBrewPage } from './pages/NewBrewPage';
 import { HistoryPage } from './pages/HistoryPage';
 import { BeanHistoryPage } from './pages/BeanHistoryPage';
+import { BeverageJournalPage } from './pages/BeverageJournalPage';
 import { useI18n } from '../i18n/I18nProvider';
 import { isNative } from '../platform';
+import { localListBeans, localListBrewsWithBeans } from './storage';
+import { isUuid } from './storage/localDataValidation';
+import type { BeverageType } from './types';
+import { BEVERAGE_TYPES, beverageTypeOf } from './utils/beverage';
 
 type AuthTab = 'login' | 'signup';
 type LogTab = 'new' | 'history' | 'beans';
+const categoryIcons = { coffee: Coffee, tea: Leaf, wine: Wine };
 
 type Props = {
   user: AppUser | null;
@@ -42,6 +48,8 @@ export function LoggingApp({
   const { t } = useI18n();
   const [authTab, setAuthTab] = useState<AuthTab>('login');
   const [logTab, setLogTab] = useState<LogTab>(initialLogTab ?? 'new');
+  const [category, setCategory] = useState<BeverageType>('coffee');
+  const [linkCategory, setLinkCategory] = useState<BeverageType>('coffee');
   const [bannerDismissed, setBannerDismissed] = useState(() => {
     try {
       return localStorage.getItem('beanlog.guest.bannerDismissed') === 'true';
@@ -62,6 +70,37 @@ export function LoggingApp({
   useEffect(() => {
     if (initialLogTab) setLogTab(initialLogTab);
   }, [initialLogTab]);
+
+  useEffect(() => {
+    const beanId = initialHistoryBeanUid ?? initialBeanUid;
+    if (!user || (!isUuid(beanId) && !isUuid(initialDuplicateBrewUid))) return;
+    let cancelled = false;
+    async function resolveCategory() {
+      let row: { beverage_type?: BeverageType } | null | undefined;
+      if (isGuest) {
+        row = isUuid(beanId) ? localListBeans().find(bean => bean.uid === beanId)
+          : localListBrewsWithBeans().find(brew => brew.uid === initialDuplicateBrewUid)?.beans;
+      } else {
+        const client = getSupabaseClient();
+        if (isUuid(beanId)) {
+          const { data, error } = await client.from('beans').select('*').eq('uid', beanId).maybeSingle();
+          if (error) throw error;
+          row = data;
+        } else {
+          const { data, error } = await client.from('brews').select('beans(*)').eq('uid', initialDuplicateBrewUid!).maybeSingle();
+          if (error) throw error;
+          row = (data as { beans: { beverage_type?: BeverageType } | null } | null)?.beans;
+        }
+      }
+      if (!cancelled && row) {
+        const type = beverageTypeOf(row);
+        setLinkCategory(type);
+        setCategory(type);
+      }
+    }
+    void resolveCategory().catch(() => { /* Existing pages still handle inaccessible records. */ });
+    return () => { cancelled = true; };
+  }, [user?.uid, isGuest, initialBeanUid, initialHistoryBeanUid, initialDuplicateBrewUid]);
 
   // -----------------------------------------------------------------------
   // Render: Supabase not configured — offer guest mode
@@ -140,6 +179,11 @@ export function LoggingApp({
   // Render: Authenticated OR Guest — main app with New Brew | History | Beans
   // -----------------------------------------------------------------------
 
+  const newTabLabel = t(category === 'coffee' ? 'logging.tab.newBrew' : `beverage.new.${category}`);
+  const itemsTabLabel = t(category === 'coffee' ? 'logging.tab.beans' : `beverage.library.${category}`);
+  const ItemsIcon = categoryIcons[category];
+  const linkedBean = linkCategory === category ? initialBeanUid : undefined;
+  const linkedHistoryBean = linkCategory === category ? initialHistoryBeanUid : undefined;
   return (
     <div className={`max-w-4xl mx-auto space-y-4 ${native ? 'pb-[calc(4rem+env(safe-area-inset-bottom))]' : ''}`}>
       {/* Guest mode banner */}
@@ -177,33 +221,49 @@ export function LoggingApp({
         </div>
       )}
 
+      <div role="group" aria-label={t('beverage.category')}
+        className="grid grid-cols-3 gap-1 rounded-lg border border-gray-200 bg-gray-100 p-1">
+        {BEVERAGE_TYPES.map(type => {
+          const Icon = categoryIcons[type];
+          return <button type="button" key={type} aria-pressed={category === type}
+            className={`flex min-h-10 min-w-0 items-center justify-center gap-1.5 rounded-md px-1 py-2 text-sm font-medium ${category === type
+              ? 'bg-white text-amber-800 shadow-sm' : 'text-gray-600 hover:bg-white/60'}`}
+            onClick={() => setCategory(type)}>
+            <Icon size={16} className="shrink-0" aria-hidden="true" />{t(`beverage.${type}`)}
+          </button>;
+        })}
+      </div>
+
       {/* Tabs: top on web, bottom on native */}
       {!native && (
         <div className="flex items-center gap-2 flex-wrap">
           <TabButton active={logTab === 'new'} onClick={() => setLogTab('new')}>
-            {t('logging.tab.newBrew')}
+            {newTabLabel}
           </TabButton>
           <TabButton active={logTab === 'history'} onClick={() => setLogTab('history')}>
             {t('logging.tab.history')}
           </TabButton>
           <TabButton active={logTab === 'beans'} onClick={() => setLogTab('beans')}>
-            {t('logging.tab.beans')}
+            {itemsTabLabel}
           </TabButton>
         </div>
       )}
 
-      {logTab === 'new' && (
+      {category === 'coffee' && logTab === 'new' && (
         <NewBrewPage
           key={[initialBeanUid ?? '', initialDuplicateBrewUid ?? '', initialDoseG ?? ''].join('|')}
           user={user}
           isGuest={isGuest}
-          initialBeanUid={initialBeanUid}
+          initialBeanUid={linkedBean}
           initialDuplicateBrewUid={initialDuplicateBrewUid}
           initialDoseG={initialDoseG}
         />
       )}
-      {logTab === 'history' && <HistoryPage user={user} isGuest={isGuest} beanUidFilter={initialHistoryBeanUid} />}
-      {logTab === 'beans' && <BeanHistoryPage user={user} isGuest={isGuest} />}
+      {category === 'coffee' && logTab === 'history' && <HistoryPage user={user} isGuest={isGuest} beanUidFilter={linkedHistoryBean} />}
+      {category === 'coffee' && logTab === 'beans' && <BeanHistoryPage user={user} isGuest={isGuest} />}
+      {category !== 'coffee' && <BeverageJournalPage key={`${category}:${logTab}:${linkedBean ?? ''}:${linkedHistoryBean ?? ''}`}
+        user={user} isGuest={isGuest} category={category} mode={logTab}
+        initialBeanUid={logTab === 'history' ? linkedHistoryBean : linkedBean} />}
 
       {native && (
         <nav
@@ -221,7 +281,7 @@ export function LoggingApp({
             onClick={() => setLogTab('new')}
           >
             <PlusCircle className="w-6 h-6" aria-hidden />
-            <span className="text-xs font-medium">{t('logging.tab.newBrew')}</span>
+            <span className="px-1 text-center text-xs font-medium">{newTabLabel}</span>
           </button>
           <button
             type="button"
@@ -244,8 +304,8 @@ export function LoggingApp({
             }`}
             onClick={() => setLogTab('beans')}
           >
-            <Coffee className="w-6 h-6" aria-hidden />
-            <span className="text-xs font-medium">{t('logging.tab.beans')}</span>
+            <ItemsIcon className="w-6 h-6" aria-hidden />
+            <span className="px-1 text-center text-xs font-medium">{itemsTabLabel}</span>
           </button>
         </nav>
       )}

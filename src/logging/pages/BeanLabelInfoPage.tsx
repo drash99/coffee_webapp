@@ -5,6 +5,8 @@ import { useI18n } from '../../i18n/I18nProvider';
 import type { FlavorNote } from '../types';
 import { fmtDate } from '../utils/formatting';
 import { NoteDotsList } from '../components/NoteDotsList';
+import { localGetBeanLabel, localListBeans } from '../storage';
+import { getStorageErrorMessage } from '../utils/storageError';
 
 type Props = {
   labelUid: string;
@@ -17,7 +19,7 @@ type PublicBeanLabelRow = {
   label_uid: string;
   grams: number | null;
   bean_uid: string;
-  bean_user_uid: string;
+  bean_user_uid: string | null;
   bean_name: string | null;
   roastery: string | null;
   producer: string | null;
@@ -27,7 +29,8 @@ type PublicBeanLabelRow = {
   varietal: string | null;
   roasted_on: string | null;
   cup_flavor_notes: FlavorNote[] | null;
-  created_at: string;
+  created_at: string | null;
+  localOnly?: boolean;
 };
 
 function navigate(url: string) {
@@ -46,10 +49,26 @@ export function BeanLabelInfoPage({ labelUid, viewerUser, isGuest, standalone = 
     async function load() {
       setError(null);
       setLoading(true);
+      setRow(null);
       try {
         const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(labelUid);
         if (!isUuid) {
           setRow(null);
+          return;
+        }
+        // Local labels can predate signup, including when opened via label.html.
+        const label = localGetBeanLabel(labelUid);
+        const bean = label ? localListBeans().find((b) => b.uid === label.bean_uid) : null;
+        if (label && bean) {
+          setRow({
+            ...bean,
+            label_uid: label.uid,
+            bean_uid: bean.uid,
+            bean_user_uid: null,
+            grams: label.grams,
+            created_at: label.created_at ?? null,
+            localOnly: true,
+          });
           return;
         }
         if (!isSupabaseConfigured()) throw new Error(t('analysis.grindMap.supabaseNotConfigured'));
@@ -61,7 +80,7 @@ export function BeanLabelInfoPage({ labelUid, viewerUser, isGuest, standalone = 
         setRow(first);
       } catch (e) {
         if (!active) return;
-        setError(e instanceof Error ? e.message : t('common.loadFailed'));
+        setError(getStorageErrorMessage(e, t('common.loadFailed'), t));
       } finally {
         if (active) setLoading(false);
       }
@@ -74,9 +93,10 @@ export function BeanLabelInfoPage({ labelUid, viewerUser, isGuest, standalone = 
 
   const isOwner = useMemo(() => {
     if (!row) return false;
+    if (row.localOnly) return isGuest && !standalone;
     if (!viewerUser || isGuest) return false;
     return viewerUser.uid === row.bean_user_uid;
-  }, [row, viewerUser, isGuest]);
+  }, [row, viewerUser, isGuest, standalone]);
 
   return (
     <div className="max-w-4xl mx-auto space-y-4">
@@ -102,6 +122,14 @@ export function BeanLabelInfoPage({ labelUid, viewerUser, isGuest, standalone = 
           <div className="p-4 text-sm text-gray-500">{t('beanLabelInfo.notFound')}</div>
         ) : (
           <div className="p-4 space-y-3 text-sm">
+            {row.localOnly && (
+              <div role="note" className="text-xs text-amber-900 bg-amber-50 border border-amber-200 rounded-lg p-2">
+                {t('beanLabelInfo.localOnly')}
+                {standalone && (
+                  <a className="block mt-2 underline" href="./">{t('beanLabelInfo.backToApp')}</a>
+                )}
+              </div>
+            )}
             <div className="flex items-center justify-between gap-3 flex-wrap">
               <div className="text-xs text-gray-500">
                 {t('beanLabelInfo.labeledAt', { date: fmtDate(row.created_at) })}

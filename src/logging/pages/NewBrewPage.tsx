@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ClipboardCopy, ClipboardPaste, FileJson } from 'lucide-react';
 import type { AppUser } from '../../auth/types';
 import { getSupabaseClient } from '../../config/supabase';
 import { FlavorWheelPicker } from '../components/FlavorWheelPicker';
 import { StarRating } from '../components/StarRating';
 import { AutocompleteInput } from '../components/AutocompleteInput';
+import { PhotoImportPanel } from '../components/PhotoImportPanel';
 import { useGrinderSuggestions } from '../hooks/useGrinderSuggestions';
 import { useBeanSuggestions } from '../hooks/useBeanSuggestions';
 import { useRecipeSuggestions } from '../hooks/useRecipeSuggestions';
@@ -12,15 +12,18 @@ import { toNullableNumber, todayYMD, fToC, fmtDate } from '../utils/formatting';
 import { unique } from '../utils/formatting';
 import { beanDisplayLabel } from '../utils/beanLabel';
 import { buildBeanImportPrompt, parseBeanImportJson } from '../utils/beanJsonImport';
-import type { BeanInput, BrewInput, FlavorNote, GrinderInput } from '../types';
+import { fetchAllRows } from '../utils/pagination';
+import { prepareGrinder, type PreparedGrinder } from '../utils/grinder';
+import { getStorageErrorMessage } from '../utils/storageError';
+import { saveCloudData, type BeanlogSaveData } from '../storage/cloudDb';
+import { validateLocalData } from '../storage/localDataValidation';
+import type { BeanInput, BeverageType, BrewInput, FlavorNote, GrinderInput } from '../types';
+import { beverageTypeOf } from '../utils/beverage';
 import { useI18n } from '../../i18n/I18nProvider';
 import {
   localListBeans,
-  localInsertBean,
-  localUpdateBean,
-  localGetOrCreateGrinder,
-  localInsertBrew,
-  localInsertParticleSize,
+  localGetAllData,
+  localSaveData,
   localSearchParticleSizes,
   localListGrinders,
   localListBrewsWithBeans,
@@ -35,6 +38,7 @@ type Props = {
 };
 
 type SavedBeanOption = {
+  beverage_type?: BeverageType;
   uid: string;
   bean_name: string | null;
   roastery: string | null;
@@ -99,8 +103,6 @@ export function NewBrewPage({
   const [selectedBeanUid, setSelectedBeanUid] = useState('');
   const [beanSaving, setBeanSaving] = useState(false);
   const [beanMsg, setBeanMsg] = useState<string | null>(null);
-  const [beanImportJson, setBeanImportJson] = useState('');
-  const [beanImportMsg, setBeanImportMsg] = useState<string | null>(null);
 
   const [grinder, setGrinder] = useState<GrinderInput>({
     maker: '',
@@ -142,13 +144,20 @@ export function NewBrewPage({
   const appliedInitialBeanUidRef = useRef<string | null>(null);
   const appliedInitialDoseRef = useRef<string | null>(null);
   const appliedDuplicateBrewUidRef = useRef<string | null>(null);
+  const draftBeanUidRef = useRef<string | null>(null);
+  const draftBrewUidRef = useRef<string | null>(null);
+  const draftBrewGrinderRef = useRef<PreparedGrinder | null>(null);
+  const draftParticleUidRef = useRef<string | null>(null);
+  const draftParticleGrinderRef = useRef<PreparedGrinder | null>(null);
+  const saveInFlightRef = useRef(false);
 
   // --- Suggestions: hooks for Supabase, inline derivation for guest ---
-  const hookBeanSugg = useBeanSuggestions(isGuest ? undefined : user.uid);
-  const hookGrinderSugg = useGrinderSuggestions(isGuest ? undefined : user.uid);
+  const hookBeanSugg = useBeanSuggestions(isGuest ? undefined : user.uid, recipeSuggestionsRefreshKey);
+  const hookGrinderSugg = useGrinderSuggestions(isGuest ? undefined : user.uid, recipeSuggestionsRefreshKey);
   const hookRecipeSugg = useRecipeSuggestions(isGuest ? undefined : user.uid, recipeSuggestionsRefreshKey);
 
   function applySavedBeanDetails(source: SavedBeanOption) {
+    draftBeanUidRef.current = null;
     setSelectedBeanUid(source.uid);
     setBean({
       bean_name: source.bean_name ?? '',
@@ -175,10 +184,10 @@ export function NewBrewPage({
       overrideDoseG?: string | null;
     },
   ) {
-    if (row.beans) {
-      applySavedBeanDetails(row.beans);
-    } else {
-      setSelectedBeanUid(row.bean_uid);
+    if (selectedBeanUid !== row.bean_uid) {
+      const currentBean = savedBeans.find((saved) => saved.uid === row.bean_uid) ?? row.beans;
+      if (currentBean) applySavedBeanDetails(currentBean);
+      else setSelectedBeanUid(row.bean_uid);
     }
     setGrinder({
       maker: row.grinders?.maker ?? '',
@@ -231,9 +240,23 @@ export function NewBrewPage({
     };
   }, [isGuest, savedBeans]);
 
+  const guestSuggestions = useMemo(() => {
+    try {
+      if (isGuest) validateLocalData(localGetAllData(), { allowOrphanLabels: true });
+      return {
+        grinders: isGuest ? localListGrinders() : [],
+        recipes: isGuest ? unique(localListBrewsWithBeans().filter(row => beverageTypeOf(row.beans) === 'coffee')
+          .map((row) => (row.recipe ?? '').trim())) : [],
+        error: null,
+      };
+    } catch (error) {
+      return { grinders: [], recipes: [], error };
+    }
+  }, [isGuest, recipeSuggestionsRefreshKey]);
+
   const guestGrinderSugg = useMemo(() => {
     if (!isGuest) return null;
-    const grinders = localListGrinders();
+    const grinders = guestSuggestions.grinders;
     const makers = Array.from(new Map(grinders.map((g) => [(g.maker ?? '').toLowerCase(), g.maker ?? ''])).values())
       .filter(Boolean)
       .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
@@ -249,12 +272,7 @@ export function NewBrewPage({
           .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
       },
     };
-  }, [isGuest]);
-
-  const guestRecipeSuggestions = useMemo(() => {
-    if (!isGuest) return [];
-    return unique(localListBrewsWithBeans().map((row) => (row.recipe ?? '').trim()));
-  }, [isGuest, recipeSuggestionsRefreshKey]);
+  }, [isGuest, guestSuggestions]);
 
   // Unified suggestion accessors
   const roasteries = isGuest ? (guestBeanSugg?.roasteries ?? []) : hookBeanSugg.roasteries;
@@ -270,7 +288,7 @@ export function NewBrewPage({
   const modelsForMaker = isGuest
     ? (m: string) => guestGrinderSugg?.modelsForMaker(m) ?? []
     : hookGrinderSugg.modelsForMaker;
-  const recipeSuggestions = isGuest ? guestRecipeSuggestions : hookRecipeSugg.recipes;
+  const recipeSuggestions = isGuest ? guestSuggestions.recipes : hookRecipeSugg.recipes;
   const beanImportPrompt = useMemo(() => buildBeanImportPrompt(savedBeans), [savedBeans]);
 
   const brewDateIso = useMemo(() => {
@@ -287,18 +305,17 @@ export function NewBrewPage({
 
   async function loadSavedBeans() {
     if (isGuest) {
-      setSavedBeans(localListBeans() as SavedBeanOption[]);
+      validateLocalData(localGetAllData(), { allowOrphanLabels: true });
+      setSavedBeans(localListBeans().filter(row => beverageTypeOf(row) === 'coffee'));
       return;
     }
     const supabase = getSupabaseClient();
-    const { data, error: qErr } = await supabase
+    const data = await fetchAllRows<SavedBeanOption>(() => supabase
       .from('beans')
-      .select(
-        'uid,bean_name,roastery,producer,origin_location,origin_country,process,varietal,cup_notes,cup_flavor_notes,roasted_on'
-      )
-      .order('created_at', { ascending: false });
-    if (qErr) throw new Error(qErr.message);
-    setSavedBeans((data ?? []) as SavedBeanOption[]);
+      .select('*')
+      .order('created_at', { ascending: false })
+      .order('uid'));
+    setSavedBeans(data.filter(row => beverageTypeOf(row) === 'coffee'));
   }
 
   async function loadRecentBrewForBean(beanUid: string): Promise<BrewTemplateRow | null> {
@@ -334,6 +351,8 @@ export function NewBrewPage({
       )
       .eq('bean_uid', beanUid)
       .order('brew_date', { ascending: false })
+      .order('created_at', { ascending: false })
+      .order('uid', { ascending: false })
       .limit(1)
       .maybeSingle();
     if (error) throw new Error(error.message);
@@ -344,7 +363,7 @@ export function NewBrewPage({
     if (!uid) return null;
 
     if (isGuest) {
-      return (localListBrewsWithBeans().find((brew) => brew.uid === uid) as BrewTemplateRow | undefined) ?? null;
+      return (localListBrewsWithBeans().find(brew => brew.uid === uid && beverageTypeOf(brew.beans) === 'coffee') as BrewTemplateRow | undefined) ?? null;
     }
 
     const supabase = getSupabaseClient();
@@ -367,21 +386,21 @@ export function NewBrewPage({
         extraction_note,
         taste_note,
         taste_flavor_notes,
-        beans ( uid, bean_name, roastery, producer, origin_location, origin_country, process, varietal, cup_notes, cup_flavor_notes, roasted_on ),
+        beans ( * ),
         grinders ( uid, maker, model )
       `,
       )
       .eq('uid', uid)
       .maybeSingle();
     if (error) throw new Error(error.message);
-    return (data as BrewTemplateRow | null) ?? null;
+    const row = data as BrewTemplateRow | null;
+    return row && beverageTypeOf(row.beans) === 'coffee' ? row : null;
   }
 
   useEffect(() => {
     void loadSavedBeans().catch((e) => {
-      setBeanMsg(e instanceof Error ? e.message : t('common.loadFailed'));
+      setBeanMsg(getStorageErrorMessage(e, t('common.loadFailed'), t));
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user.uid, isGuest]);
 
   useEffect(() => {
@@ -406,7 +425,7 @@ export function NewBrewPage({
       })
       .catch((e) => {
         if (!active) return;
-        setError(e instanceof Error ? e.message : t('common.loadFailed'));
+        setError(getStorageErrorMessage(e, t('common.loadFailed'), t));
       });
 
     return () => {
@@ -425,6 +444,7 @@ export function NewBrewPage({
   useEffect(() => {
     if (!selectedBeanUid) {
       setRecentBeanBrew(null);
+      setRecentBrewLoading(false);
       return;
     }
 
@@ -437,7 +457,7 @@ export function NewBrewPage({
       })
       .catch((e) => {
         if (!active) return;
-        setError(e instanceof Error ? e.message : t('common.loadFailed'));
+        setError(getStorageErrorMessage(e, t('common.loadFailed'), t));
       })
       .finally(() => {
         if (active) setRecentBrewLoading(false);
@@ -446,41 +466,15 @@ export function NewBrewPage({
     return () => {
       active = false;
     };
-  }, [selectedBeanUid, isGuest, t]);
+  }, [selectedBeanUid, isGuest, t, recipeSuggestionsRefreshKey]);
 
   // -----------------------------------------------------------------------
   // Grinder helpers
   // -----------------------------------------------------------------------
 
-  async function getOrCreateGrinderUid(makerRaw: string, modelRaw: string): Promise<string> {
-    const maker = makerRaw.trim();
-    const model = modelRaw.trim();
-    if (!maker || !model) {
-      throw new Error(t('grindMap.error.missingGrinder'));
-    }
-
-    if (isGuest) {
-      return localGetOrCreateGrinder(maker, model);
-    }
-
-    const supabase = getSupabaseClient();
-    const { data: found, error: foundErr } = await supabase
-      .from('grinders')
-      .select('uid')
-      .ilike('maker', maker)
-      .ilike('model', model)
-      .maybeSingle();
-    if (foundErr) throw new Error(foundErr.message);
-    if (found?.uid) return found.uid as string;
-
-    const uid = crypto.randomUUID();
-    const { error: insertErr } = await supabase.from('grinders').insert({
-      uid,
-      maker,
-      model
-    });
-    if (insertErr) throw new Error(insertErr.message);
-    return uid;
+  async function persist(data: BeanlogSaveData) {
+    if (isGuest) localSaveData(data);
+    else await saveCloudData(data);
   }
 
   // -----------------------------------------------------------------------
@@ -488,7 +482,12 @@ export function NewBrewPage({
   // -----------------------------------------------------------------------
 
   async function submitParticleSize() {
+    if (saveInFlightRef.current) return;
     setMapMsg(null);
+    if (!grinder.maker.trim() || !grinder.model.trim()) {
+      setMapMsg(t('grindMap.error.missingGrinder'));
+      return;
+    }
     const setting = grinder.setting.trim();
     if (!setting) {
       setMapMsg(t('grindMap.error.missingSetting'));
@@ -500,58 +499,37 @@ export function NewBrewPage({
       return;
     }
 
+    saveInFlightRef.current = true;
     setMapSaving(true);
     try {
-      const grinder_uid = await getOrCreateGrinderUid(grinder.maker, grinder.model);
-
-      if (isGuest) {
-        localInsertParticleSize({
-          uid: crypto.randomUUID(),
-          grinder_uid,
+      draftParticleUidRef.current ??= crypto.randomUUID();
+      const prepared = await prepareGrinder(grinder.maker, grinder.model, isGuest, draftParticleGrinderRef.current);
+      draftParticleGrinderRef.current = prepared;
+      await persist({
+        grinders: [prepared],
+        particleSizes: [{
+          uid: draftParticleUidRef.current,
+          grinder_uid: prepared.uid,
           grinder_setting: setting,
           particle_median_um: median,
-        });
-      } else {
-        const supabase = getSupabaseClient();
-        const { error: insErr } = await supabase.from('grinder_particle_sizes').insert({
-          uid: crypto.randomUUID(),
-          grinder_uid,
-          grinder_setting: setting,
-          particle_median_um: median
-        });
-        if (insErr) throw new Error(insErr.message);
-      }
+        }],
+      });
+      draftParticleUidRef.current = null;
+      draftParticleGrinderRef.current = null;
+      setRecipeSuggestionsRefreshKey((key) => key + 1);
       setMapMsg(t('grindMap.saved'));
     } catch (e) {
-      setMapMsg(e instanceof Error ? e.message : t('newBrew.error.saveFailed'));
+      setMapMsg(getStorageErrorMessage(e, t('newBrew.error.saveFailed'), t));
     } finally {
+      saveInFlightRef.current = false;
       setMapSaving(false);
     }
   }
 
   // -----------------------------------------------------------------------
-  // Bean flavor notes sync (Supabase only — local stores inline)
-  // -----------------------------------------------------------------------
-
-  async function syncBeanFlavorNotes(beanUid: string, notes: FlavorNote[]) {
-    if (isGuest) return; // Local storage keeps notes inline on the bean row
-    const supabase = getSupabaseClient();
-    const { error: deleteErr } = await supabase.from('bean_flavor_notes').delete().eq('bean_uid', beanUid);
-    if (deleteErr) throw new Error(deleteErr.message);
-    if (notes.length === 0) return;
-    const rows = notes.map((n) => ({
-      bean_uid: beanUid,
-      l1: n.path[0] ?? '',
-      l2: n.path[1] ?? null,
-      l3: n.path[2] ?? null,
-      color: n.color
-    }));
-    const { error: insErr } = await supabase.from('bean_flavor_notes').insert(rows);
-    if (insErr) throw new Error(insErr.message);
-  }
-
   function beanPayload() {
     return {
+      ...(isGuest ? { beverage_type: 'coffee' as const } : {}),
       bean_name: bean.bean_name || null,
       roastery: bean.roastery || null,
       producer: bean.producer || null,
@@ -565,84 +543,23 @@ export function NewBrewPage({
     };
   }
 
-  async function copyBeanImportPrompt() {
-    setBeanImportMsg(null);
-    try {
-      await navigator.clipboard.writeText(beanImportPrompt);
-      setBeanImportMsg(t('beanImport.prompt.copied'));
-    } catch {
-      setBeanImportMsg(t('beanImport.prompt.copyFailed'));
-    }
-  }
-
   function applyBeanImport(raw: string) {
     const nextBean = parseBeanImportJson(raw);
+    draftBeanUidRef.current = null;
     setBean(nextBean);
     setSelectedBeanUid('');
     setPresetMsg(null);
     setBeanMsg(null);
-    setBeanImportJson(raw);
-    setBeanImportMsg(t('beanImport.imported'));
-  }
-
-  function importBeanJsonFromText() {
-    setBeanImportMsg(null);
-    if (!beanImportJson.trim()) {
-      setBeanImportMsg(t('beanImport.error.empty'));
-      return;
-    }
-
-    try {
-      applyBeanImport(beanImportJson);
-    } catch {
-      setBeanImportMsg(t('beanImport.error.invalid'));
-    }
-  }
-
-  async function importBeanJsonFromClipboard() {
-    setBeanImportMsg(null);
-    try {
-      const raw = await navigator.clipboard.readText();
-      if (!raw.trim()) {
-        setBeanImportMsg(t('beanImport.error.empty'));
-        return;
-      }
-      applyBeanImport(raw);
-    } catch {
-      setBeanImportMsg(t('beanImport.error.clipboardRead'));
-    }
   }
 
   // -----------------------------------------------------------------------
   // Resolve bean UID for brew save
   // -----------------------------------------------------------------------
 
-  async function resolveBeanUidForBrew(): Promise<string> {
-    if (isGuest) {
-      if (selectedBeanUid) {
-        localUpdateBean(selectedBeanUid, beanPayload());
-        return selectedBeanUid;
-      }
-      const bean_uid = crypto.randomUUID();
-      localInsertBean({ uid: bean_uid, ...beanPayload() });
-      return bean_uid;
-    }
-
-    const supabase = getSupabaseClient();
-    if (selectedBeanUid) {
-      const { error: updErr } = await supabase.from('beans').update(beanPayload()).eq('uid', selectedBeanUid);
-      if (updErr) throw new Error(updErr.message);
-      await syncBeanFlavorNotes(selectedBeanUid, bean.cup_flavor_notes);
-      return selectedBeanUid;
-    }
-    const bean_uid = crypto.randomUUID();
-    const { error: beanErr } = await supabase.from('beans').insert({
-      uid: bean_uid,
-      ...beanPayload()
-    });
-    if (beanErr) throw new Error(beanErr.message);
-    await syncBeanFlavorNotes(bean_uid, bean.cup_flavor_notes);
-    return bean_uid;
+  function resolveBeanUid(): string {
+    if (selectedBeanUid) return selectedBeanUid;
+    draftBeanUidRef.current ??= crypto.randomUUID();
+    return draftBeanUidRef.current;
   }
 
   // -----------------------------------------------------------------------
@@ -650,42 +567,21 @@ export function NewBrewPage({
   // -----------------------------------------------------------------------
 
   async function saveBeanOnly() {
+    if (saveInFlightRef.current) return;
+    saveInFlightRef.current = true;
     setBeanMsg(null);
     setBeanSaving(true);
     try {
-      if (isGuest) {
-        let beanUid = selectedBeanUid;
-        if (beanUid) {
-          localUpdateBean(beanUid, beanPayload());
-        } else {
-          beanUid = crypto.randomUUID();
-          localInsertBean({ uid: beanUid, ...beanPayload() });
-        }
-        await loadSavedBeans();
-        setSelectedBeanUid(beanUid);
-        setBeanMsg(t('newBrew.bean.saved'));
-      } else {
-        const supabase = getSupabaseClient();
-        let beanUid = selectedBeanUid;
-        if (beanUid) {
-          const { error: updErr } = await supabase.from('beans').update(beanPayload()).eq('uid', beanUid);
-          if (updErr) throw new Error(updErr.message);
-        } else {
-          beanUid = crypto.randomUUID();
-          const { error: insErr } = await supabase.from('beans').insert({
-            uid: beanUid,
-            ...beanPayload()
-          });
-          if (insErr) throw new Error(insErr.message);
-        }
-        await syncBeanFlavorNotes(beanUid, bean.cup_flavor_notes);
-        await loadSavedBeans();
-        setSelectedBeanUid(beanUid);
-        setBeanMsg(t('newBrew.bean.saved'));
-      }
+      const beanUid = resolveBeanUid();
+      await persist({ beans: [{ uid: beanUid, ...beanPayload() }] });
+      setSelectedBeanUid(beanUid);
+      setBeanMsg(t('newBrew.bean.saved'));
+      setRecipeSuggestionsRefreshKey((key) => key + 1);
+      await loadSavedBeans().catch(() => setBeanMsg(t('newBrew.savedRefreshFailed')));
     } catch (e) {
-      setBeanMsg(e instanceof Error ? e.message : t('newBrew.error.saveFailed'));
+      setBeanMsg(getStorageErrorMessage(e, t('newBrew.error.saveFailed'), t));
     } finally {
+      saveInFlightRef.current = false;
       setBeanSaving(false);
     }
   }
@@ -699,7 +595,8 @@ export function NewBrewPage({
     setSearchRows([]);
     setSearchLoading(true);
     try {
-      const grinder_uid = await getOrCreateGrinderUid(grinder.maker, grinder.model);
+      if (!grinder.maker.trim() || !grinder.model.trim()) throw new Error(t('grindMap.error.missingGrinder'));
+      const { uid: grinder_uid } = await prepareGrinder(grinder.maker, grinder.model, isGuest);
 
       if (isGuest) {
         setSearchRows(localSearchParticleSizes(grinder_uid));
@@ -713,7 +610,7 @@ export function NewBrewPage({
         setSearchRows((data ?? []) as Array<{ grinder_setting: string; particle_median_um: number }>);
       }
     } catch (e) {
-      setMapMsg(e instanceof Error ? e.message : t('common.loadFailed'));
+      setMapMsg(getStorageErrorMessage(e, t('common.loadFailed'), t));
     } finally {
       setSearchLoading(false);
     }
@@ -724,6 +621,7 @@ export function NewBrewPage({
   // -----------------------------------------------------------------------
 
   async function save() {
+    if (saveInFlightRef.current) return;
     setError(null);
     setOk(null);
     if (!brewDateIso) {
@@ -731,13 +629,18 @@ export function NewBrewPage({
       return;
     }
 
+    saveInFlightRef.current = true;
     setSaving(true);
     try {
-      const bean_uid = await resolveBeanUidForBrew();
-      const brew_uid = crypto.randomUUID();
+      const bean_uid = resolveBeanUid();
+      // Keep IDs across failures, including a lost response after the server committed.
+      draftBrewUidRef.current ??= crypto.randomUUID();
+      const brew_uid = draftBrewUidRef.current;
 
-      const grinder_uid =
-        grinder.maker.trim() && grinder.model.trim() ? await getOrCreateGrinderUid(grinder.maker, grinder.model) : null;
+      const prepared = grinder.maker.trim() && grinder.model.trim()
+        ? await prepareGrinder(grinder.maker, grinder.model, isGuest, draftBrewGrinderRef.current)
+        : null;
+      draftBrewGrinderRef.current = prepared;
 
       const waterTempRaw = toNullableNumber(brew.water_temp);
       const water_temp_c =
@@ -747,7 +650,7 @@ export function NewBrewPage({
         uid: brew_uid,
         brew_date: brewDateIso,
         bean_uid,
-        grinder_uid,
+        grinder_uid: prepared?.uid ?? null,
         grinder_setting: grinder.setting || null,
         recipe: brew.recipe || null,
         coffee_dose_g: toNullableNumber(brew.coffee_dose_g),
@@ -762,30 +665,17 @@ export function NewBrewPage({
         taste_flavor_notes: (brew.taste_flavor_notes as FlavorNote[]) || []
       };
 
-      if (isGuest) {
-        localInsertBrew(brewRow);
-      } else {
-        const supabase = getSupabaseClient();
-        const { error: brewErr } = await supabase.from('brews').insert(brewRow);
-        if (brewErr) throw new Error(brewErr.message);
+      await persist({
+        beans: [{ uid: bean_uid, ...beanPayload() }],
+        grinders: prepared ? [prepared] : [],
+        brews: [brewRow],
+      });
 
-        // Insert normalized brew flavor notes for efficient hierarchical filtering
-        if (brew.taste_flavor_notes.length > 0) {
-          const brewNoteRows = brew.taste_flavor_notes.map((n) => ({
-            brew_uid,
-            l1: n.path[0] ?? '',
-            l2: n.path[1] ?? null,
-            l3: n.path[2] ?? null,
-            color: n.color
-          }));
-          const { error: bfnErr } = await supabase.from('brew_flavor_notes').insert(brewNoteRows);
-          if (bfnErr) throw new Error(bfnErr.message);
-        }
-      }
-
+      draftBrewUidRef.current = null;
+      draftBrewGrinderRef.current = null;
+      draftBeanUidRef.current = null;
       setOk(t('newBrew.saved'));
       setRecipeSuggestionsRefreshKey((v) => v + 1);
-      await loadSavedBeans();
       // Keep brew date and selected bean, clear brew-centric fields for convenience
       if (!selectedBeanUid) {
         setBean(emptyBean);
@@ -807,15 +697,22 @@ export function NewBrewPage({
       }));
       setMapMedianUm('');
       setSearchRows([]);
+      await loadSavedBeans().catch(() => setError(t('newBrew.savedRefreshFailed')));
     } catch (e) {
-      setError(e instanceof Error ? e.message : t('newBrew.error.saveFailed'));
+      setError(getStorageErrorMessage(e, t('newBrew.error.saveFailed'), t));
     } finally {
+      saveInFlightRef.current = false;
       setSaving(false);
     }
   }
 
   return (
-    <div className="space-y-6">
+    <fieldset className="space-y-6 min-w-0" disabled={saving || beanSaving || mapSaving}>
+      {guestSuggestions.error != null && (
+        <p role="alert" className="text-sm text-red-700 border border-red-200 rounded-lg p-3">
+          {getStorageErrorMessage(guestSuggestions.error, t('common.loadFailed'), t)}
+        </p>
+      )}
       <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 space-y-4">
         <h2 className="text-lg font-semibold">{t('newBrew.bean.title')}</h2>
 
@@ -831,6 +728,7 @@ export function NewBrewPage({
                 setBeanMsg(null);
                 setPresetMsg(null);
                 if (!nextUid) {
+                  draftBeanUidRef.current = null;
                   setBean(emptyBean);
                   return;
                 }
@@ -893,57 +791,7 @@ export function NewBrewPage({
           </div>
         )}
 
-        <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 space-y-3">
-          <div className="flex items-start justify-between gap-3 flex-wrap">
-            <div className="min-w-0">
-              <div className="text-sm font-semibold text-gray-800">{t('beanImport.title')}</div>
-              <div className="text-xs text-gray-500">{t('beanImport.description')}</div>
-            </div>
-            <button
-              type="button"
-              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border bg-white text-sm hover:bg-gray-50 whitespace-nowrap"
-              onClick={copyBeanImportPrompt}
-            >
-              <ClipboardCopy className="w-4 h-4" aria-hidden="true" />
-              {t('beanImport.prompt.copy')}
-            </button>
-          </div>
-
-          <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">{t('beanImport.json.label')}</label>
-            <textarea
-              className="w-full p-2 border rounded-lg min-h-24 bg-white font-mono text-base"
-              value={beanImportJson}
-              onChange={(e) => {
-                setBeanImportJson(e.target.value);
-                setBeanImportMsg(null);
-              }}
-              placeholder={t('beanImport.json.placeholder')}
-              spellCheck={false}
-            />
-          </div>
-
-          <div className="flex items-center gap-2 flex-wrap">
-            <button
-              type="button"
-              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-amber-700 text-white text-sm hover:bg-amber-800 whitespace-nowrap"
-              onClick={importBeanJsonFromClipboard}
-            >
-              <ClipboardPaste className="w-4 h-4" aria-hidden="true" />
-              {t('beanImport.clipboardImport')}
-            </button>
-            <button
-              type="button"
-              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border bg-white text-sm hover:bg-gray-50 whitespace-nowrap"
-              onClick={importBeanJsonFromText}
-            >
-              <FileJson className="w-4 h-4" aria-hidden="true" />
-              {t('beanImport.textImport')}
-            </button>
-          </div>
-
-          {beanImportMsg && <div className="text-xs text-gray-600">{beanImportMsg}</div>}
-        </div>
+        <PhotoImportPanel coffee prompt={beanImportPrompt} onImport={applyBeanImport} />
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div className="sm:col-span-2">
@@ -1267,6 +1115,6 @@ export function NewBrewPage({
           {saving ? t('newBrew.save.saving') : t('newBrew.save')}
         </button>
       </div>
-    </div>
+    </fieldset>
   );
 }

@@ -99,6 +99,11 @@ The app has a separate **Logging** tab (next to **Analysis**) to record brews an
 3. Create tables + policies by running `supabase/schema.sql` in the Supabase SQL editor.
    - For existing projects that used the old `app_users` model, run `supabase/patch_2026-02-12_auth_rls.sql`.
    - For brew sharing links/public read URLs, run `supabase/patch_2026-02-13_brew_share_links.sql`.
+   - Before deploying the September 2026 app update to an existing project, apply `supabase/patch_2026-09-14_atomic_save_and_ownership.sql` after the earlier flavor-note, sharing, and bean-label migrations. The app now requires its authenticated `save_beanlog_data` RPC for cloud saves and guest migration.
+   - The September patch revokes client access to legacy credentials, enforces parent ownership, hardens public share lookups, and makes related writes atomic. It retains historical data and reports ownership mismatches for administrator review. It can be applied again safely.
+   - Before releasing the Coffee / Tea / Wine journal, apply `supabase/patch_2026-11-20_beverage_categories.sql` after the September patch. It adds beverage details and updates the existing save function without removing records or rewriting notes. Older apps can continue saving without clearing the new fields.
+   - Unclassified entries with clear tea names (for example, Oolong, Sencha, or 우롱) move to Tea. Ambiguous names stay in Coffee until their owner changes **Beverage type**; the linked tasting history follows. Applying the patch again leaves explicit choices alone.
+   - In a new tea or wine product form, copy the photo import prompt for use in an LLM along with the label photo. Paste or import the returned JSON, review the draft, and save it.
 4. Create a `.env.local` in the project root (gitignored) and set:
 
    - `VITE_SUPABASE_URL`
@@ -196,6 +201,8 @@ Then:
 
 ### Deploy to GitHub Pages
 
+Apply pending Supabase migrations before publishing the frontend. CI verifies SQL against a disposable local database; it does not modify the live Supabase project.
+
 The app uses `import.meta.env.BASE_URL` for asset links (e.g. calibration PDFs).
 
 - **User/org Pages** (`username.github.io`): Site is at the root (`https://drash99.github.io/`). Use the **default** base path -- do **not** set `VITE_BASE_PATH`. Build with `npm run build` and deploy the `dist/` contents to the root of your `username.github.io` repo.
@@ -206,7 +213,7 @@ The app uses `import.meta.env.BASE_URL` for asset links (e.g. calibration PDFs).
 
 **Automated deploy to drash99.github.io**
 
-A workflow (`.github/workflows/deploy-to-pages.yml`) builds on push to `main` and pushes the built app to `drash99/drash99.github.io`. To enable it:
+A workflow (`.github/workflows/deploy-pages.yml`) runs lint, regression tests, and a production build on pull requests and pushes to `main`. Successful `main` builds publish to `drash99/drash99.github.io`. To enable it:
 
 1. Generate an SSH key pair (no passphrase):
    ```bash
@@ -218,3 +225,19 @@ A workflow (`.github/workflows/deploy-to-pages.yml`) builds on push to `main` an
    - `VITE_SUPABASE_URL`
    - `VITE_SUPABASE_ANON_KEY`
 5. Push to `main` (or run the "Deploy to GitHub Pages" workflow manually). The workflow builds with base `/` and pushes `dist/` to `drash99.github.io` `main` branch.
+
+### Regression Checks
+
+```bash
+npm ci
+npm run lint
+npm test
+npm run test:typecheck
+npm run test:cv
+npm run test:db
+npm run build
+```
+
+`test:cv` exercises the bundled OpenCV.js runtime with synthetic images. `test:db` requires PostgreSQL server tools (`initdb`, `pg_ctl`, and `psql`), found via `pg_config --bindir` or `PG_BIN`. Run it as a non-root user. It starts a disposable cluster with a private Unix socket and no TCP listener, tests migrations/security/transaction rollback and retries, then stops and removes the cluster. It never connects to the application's configured database.
+
+App regressions cover backup validation and failed-write recovery, atomic saves and migration retries, history selection and pagination, date-only formatting, stale asynchronous responses, and logout failures. Public QR labels require cloud-backed beans; existing guest labels can still be opened on the device that holds their data.

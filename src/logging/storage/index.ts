@@ -21,6 +21,8 @@ export {
   // Joined queries
   localListBrewsWithBeans,
   // Migration
+  LocalDataError,
+  localSaveData,
   localGetAllData,
   localBuildBackupPayload,
   localRestoreFromBackup,
@@ -34,4 +36,4 @@ export {
   migrateLocalToSupabase,
 } from './localDb';
 
-export type { LocalBrewWithBean } from './localDb';
+export type { LocalBackupPayload, LocalBrewWithBean, LocalData, LocalDataErrorCode, LocalSaveData } from './localDb';

@@ -1,21 +1,28 @@
-import { useEffect, useMemo, useState } from 'react';
-import { ClipboardCopy } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { ClipboardCopy, Printer } from 'lucide-react';
 import type { AppUser } from '../../auth/types';
 import { getSupabaseClient } from '../../config/supabase';
 import { useI18n } from '../../i18n/I18nProvider';
 import { AutocompleteInput } from '../components/AutocompleteInput';
 import { FlavorWheelPicker } from '../components/FlavorWheelPicker';
 import { NoteDotsList } from '../components/NoteDotsList';
+import { BrotherPrinterStatusPanel } from '../components/BrotherPrinterStatusPanel';
+import { BeverageTypeSelect } from '../components/BeverageTypeSelect';
+import { beverageTypeOf } from '../utils/beverage';
 import { useBeanSuggestions } from '../hooks/useBeanSuggestions';
 import { fmtDate } from '../utils/formatting';
+import { fetchAllRows } from '../utils/pagination';
+import { saveCloudData } from '../storage/cloudDb';
+import { getStorageErrorMessage } from '../utils/storageError';
+import { validateLocalData } from '../storage/localDataValidation';
 import { beanDisplayLabel } from '../utils/beanLabel';
-import { renderBeanLabelDataUrl } from '../utils/beanLabelImage';
+import { BEAN_LABEL_DIMENSIONS, BeanLabelLayoutError, renderBeanLabelImages } from '../utils/beanLabelImage';
 import type { BeanInput, BeanRow, FlavorNote } from '../types';
 import {
   localListBeans,
-  localUpdateBean,
+  localGetAllData,
+  localSaveData,
   localDeleteBean,
-  localInsertBeanLabels,
   localListBeanLabelsForBean,
 } from '../storage';
 import { toQrDataUrl } from '../utils/qr';
@@ -92,10 +99,13 @@ type BeanListRow = Pick<
   | 'cup_flavor_notes'
   | 'roasted_on'
   | 'created_at'
+  | 'beverage_type'
+  | 'beverage_details'
 >;
 
 function draftFromBean(bean: BeanListRow): BeanInput {
   return {
+    beverage_type: beverageTypeOf(bean),
     bean_name: bean.bean_name ?? '',
     roastery: bean.roastery ?? '',
     producer: bean.producer ?? '',
@@ -159,7 +169,7 @@ export function BeanHistoryPage({ user, isGuest = false }: Props) {
     ? (c: string, l: string) => guestSugg?.producersForLocation(c, l) ?? []
     : hookBeanSugg.producersForLocation;
 
-  const selected = useMemo(() => rows.find((r) => r.uid === selectedUid) ?? null, [rows, selectedUid]);
+  const selected = rows.find((r) => r.uid === selectedUid) ?? rows[0] ?? null;
 
   // -----------------------------------------------------------------------
   // Data loading
@@ -170,50 +180,27 @@ export function BeanHistoryPage({ user, isGuest = false }: Props) {
     setLoading(true);
     try {
       if (isGuest) {
-        const next = localListBeans() as BeanListRow[];
+        validateLocalData(localGetAllData(), { allowOrphanLabels: true });
+        const next = localListBeans().filter(row => beverageTypeOf(row) === 'coffee');
         setRows(next);
         if (next.length > 0 && !selectedUid) setSelectedUid(next[0].uid);
         if (next.length === 0) setSelectedUid(null);
       } else {
         const supabase = getSupabaseClient();
-        const { data, error: qErr } = await supabase
+        const next = await fetchAllRows<BeanListRow>(() => supabase
           .from('beans')
-          .select(
-            'uid,bean_name,roastery,producer,origin_location,origin_country,process,varietal,cup_notes,cup_flavor_notes,roasted_on,created_at'
-          )
-          .order('created_at', { ascending: false });
-        if (qErr) throw new Error(qErr.message);
-        const next = (data ?? []) as BeanListRow[];
+          .select('*')
+          .order('created_at', { ascending: false })
+          .order('uid', { ascending: false })).then(beans => beans.filter(row => beverageTypeOf(row) === 'coffee'));
         setRows(next);
         if (next.length > 0 && !selectedUid) setSelectedUid(next[0].uid);
         if (next.length === 0) setSelectedUid(null);
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : t('common.loadFailed'));
+      setError(getStorageErrorMessage(e, t('common.loadFailed'), t));
     } finally {
       setLoading(false);
     }
-  }
-
-  // -----------------------------------------------------------------------
-  // Flavor notes sync (Supabase-only — local stores inline)
-  // -----------------------------------------------------------------------
-
-  async function syncBeanFlavorNotes(beanUid: string, notes: FlavorNote[]) {
-    if (isGuest) return;
-    const supabase = getSupabaseClient();
-    const { error: delErr } = await supabase.from('bean_flavor_notes').delete().eq('bean_uid', beanUid);
-    if (delErr) throw new Error(delErr.message);
-    if (notes.length === 0) return;
-    const rows = notes.map((n) => ({
-      bean_uid: beanUid,
-      l1: n.path[0] ?? '',
-      l2: n.path[1] ?? null,
-      l3: n.path[2] ?? null,
-      color: n.color
-    }));
-    const { error: insErr } = await supabase.from('bean_flavor_notes').insert(rows);
-    if (insErr) throw new Error(insErr.message);
   }
 
   // -----------------------------------------------------------------------
@@ -226,6 +213,8 @@ export function BeanHistoryPage({ user, isGuest = false }: Props) {
     setEditSaving(true);
     try {
       const patch = {
+        ...(editDraft.beverage_type && editDraft.beverage_type !== beverageTypeOf(selected)
+          ? { beverage_type: editDraft.beverage_type } : {}),
         bean_name: editDraft.bean_name.trim() || null,
         roastery: editDraft.roastery.trim() || null,
         producer: editDraft.producer.trim() || null,
@@ -239,22 +228,16 @@ export function BeanHistoryPage({ user, isGuest = false }: Props) {
       };
 
       if (isGuest) {
-        localUpdateBean(selected.uid, patch);
+        localSaveData({ beans: [{ uid: selected.uid, ...patch }] });
       } else {
-        const supabase = getSupabaseClient();
-        const { error: updErr } = await supabase
-          .from('beans')
-          .update(patch)
-          .eq('uid', selected.uid);
-        if (updErr) throw new Error(updErr.message);
-        await syncBeanFlavorNotes(selected.uid, editDraft.cup_flavor_notes);
+        await saveCloudData({ beans: [{ uid: selected.uid, ...patch }] });
       }
 
       await refresh();
       setIsEditing(false);
       setEditDraft(null);
     } catch (e) {
-      setEditError(e instanceof Error ? e.message : t('newBrew.error.saveFailed'));
+      setEditError(getStorageErrorMessage(e, t('newBrew.error.saveFailed'), t));
     } finally {
       setEditSaving(false);
     }
@@ -279,7 +262,7 @@ export function BeanHistoryPage({ user, isGuest = false }: Props) {
       setSelectedUid(null);
       await refresh();
     } catch (e) {
-      setError(e instanceof Error ? e.message : t('beanHistory.delete.failed'));
+      setError(getStorageErrorMessage(e, t('beanHistory.delete.failed'), t));
     } finally {
       setDeleteBusy(false);
     }
@@ -294,6 +277,8 @@ export function BeanHistoryPage({ user, isGuest = false }: Props) {
       count: rows.length,
       beans: rows.map((row) => ({
         uid: row.uid,
+        beverage_type: beverageTypeOf(row),
+        ...(row.beverage_details ? { beverage_details: row.beverage_details } : {}),
         bean_name: row.bean_name,
         roastery: row.roastery,
         producer: row.producer,
@@ -322,14 +307,14 @@ export function BeanHistoryPage({ user, isGuest = false }: Props) {
 
   useEffect(() => {
     void refresh();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user.uid, isGuest]);
 
   useEffect(() => {
+    setSelectedUid(selected?.uid ?? null);
     setIsEditing(false);
     setEditDraft(null);
     setEditError(null);
-  }, [selectedUid]);
+  }, [selected?.uid]);
 
   // -----------------------------------------------------------------------
   // Render
@@ -364,7 +349,7 @@ export function BeanHistoryPage({ user, isGuest = false }: Props) {
             type="button"
             className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border bg-white text-sm hover:bg-gray-50 disabled:bg-gray-100 whitespace-nowrap"
             onClick={() => void exportBeanHistoryJson()}
-            disabled={rows.length === 0}
+            disabled={loading || Boolean(error) || rows.length === 0}
           >
             <ClipboardCopy className="w-4 h-4" aria-hidden="true" />
             {t('beanHistory.exportJson')}
@@ -398,7 +383,7 @@ export function BeanHistoryPage({ user, isGuest = false }: Props) {
             </div>
             <div className="divide-y overflow-y-auto max-h-[560px]">
               {rows.map((r) => {
-                const active = selectedUid === r.uid;
+                const active = selected?.uid === r.uid;
                 return (
                   <button
                     key={r.uid}
@@ -601,10 +586,13 @@ export function BeanHistoryPage({ user, isGuest = false }: Props) {
                 </div>
 
                 <FlavorWheelPicker
+                  beverageType={editDraft.beverage_type}
                   label={t('bean.field.cupNotesSca')}
                   value={editDraft.cup_flavor_notes}
                   onChange={(next) => setEditDraft({ ...editDraft, cup_flavor_notes: next })}
                 />
+                <BeverageTypeSelect value={editDraft.beverage_type ?? 'coffee'}
+                  onChange={beverage_type => setEditDraft({ ...editDraft, beverage_type })} />
               </div>
             ) : null}
           </div>
@@ -626,14 +614,54 @@ type LabelPreview = {
   uid: string;
   bean_uid: string;
   grams: number | null;
-  qrDataUrl: string;
+  beanName: string;
   printDataUrl: string;
-  roasteryText: string | null;
-  originText: string | null;
-  producerProcessText: string | null;
-  varietalText: string | null;
-  footerText: string;
+  previewDataUrl: string;
+  lengthDots: number;
 };
+
+async function createLabelPreview(bean: BeanListRow, grams: number | null, t: BeanLabelPrintViewProps['t']): Promise<LabelPreview> {
+  const uid = crypto.randomUUID();
+  const url = buildPublicBeanLabelUrl(uid);
+  const qrDataUrl = await toQrDataUrl(url, 160, { errorCorrectionLevel: 'L', margin: 1 });
+  const beanName = bean.bean_name || t('common.none');
+  const images = await renderBeanLabelImages({
+    roasteryText: bean.roastery?.trim() || null,
+    beanName,
+    details: [
+      { label: t('beanLabels.line.origin'), value: compactLabelText([bean.origin_country, bean.origin_location]) ?? '' },
+      { label: t('beanLabels.line.producer'), value: bean.producer?.trim() ?? '' },
+      { label: t('beanLabels.line.process'), value: bean.process?.trim() ?? '' },
+      { label: t('beanLabels.line.varietal'), value: bean.varietal?.trim() ?? '' },
+    ],
+    footerText: compactLabelText([
+      `${t('beanLabels.roastDate')}: ${bean.roasted_on || t('common.none')}`,
+      grams != null ? t('beanLabels.gramsInline', { grams: String(grams) }) : null,
+    ]) ?? '',
+    qrDataUrl,
+    qrText: url,
+  });
+  return { uid, bean_uid: bean.uid, grams, beanName, ...images };
+}
+
+function LabelFigure({ label, t, forPrint = false }: { label: LabelPreview; t: BeanLabelPrintViewProps['t']; forPrint?: boolean }) {
+  const lengthMm = label.lengthDots * 25.4 / BEAN_LABEL_DIMENSIONS.dpi;
+  return (
+    <figure className="m-0 space-y-1">
+      <div className="label" style={{
+        '--label-width': `${label.lengthDots}px`,
+        '--label-print-width': `${lengthMm}mm`,
+        aspectRatio: `${lengthMm} / ${BEAN_LABEL_DIMENSIONS.tapeWidthMm}`,
+      } as CSSProperties}>
+        <img src={label.previewDataUrl} alt={forPrint ? '' : t('beanLabels.previewAlt', { beanName: label.beanName })}
+          width={label.lengthDots} height={BEAN_LABEL_DIMENSIONS.heightDots} className="label-image" />
+      </div>
+      {!forPrint && <figcaption className="text-center text-xs text-gray-500">
+        {t('beanLabels.dimensions', { length: lengthMm.toFixed(1), width: String(BEAN_LABEL_DIMENSIONS.tapeWidthMm) })}
+      </figcaption>}
+    </figure>
+  );
+}
 
 function BeanLabelPrintView({ t, isGuest, beans, initialBeanUid, onBack }: BeanLabelPrintViewProps) {
   const [beanUid, setBeanUid] = useState<string>(initialBeanUid ?? '');
@@ -642,28 +670,43 @@ function BeanLabelPrintView({ t, isGuest, beans, initialBeanUid, onBack }: BeanL
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ tone: 'error' | 'success'; text: string } | null>(null);
   const [labels, setLabels] = useState<LabelPreview[]>([]);
+  const [previewGeneration, setPreviewGeneration] = useState(0);
+  const [previewResult, setPreviewResult] = useState<{
+    bean: BeanListRow; grams: number | null; generation: number; translate: typeof t;
+    label?: LabelPreview; error?: string;
+  } | null>(null);
+  const printPending = useRef(false);
+  const historyRequest = useRef(0);
   const [labelHistory, setLabelHistory] = useState<LabelHistoryBatch[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const supportsNativePrint = canPrintBrotherLabels();
   const printerName = getLabelPrinterName();
 
   const selected = useMemo(() => beans.find((b) => b.uid === beanUid) ?? null, [beans, beanUid]);
+  const gramsNumber = grams.trim() ? Number(grams) : null;
+  const gramsValid = gramsNumber === null || (Number.isFinite(gramsNumber) && gramsNumber >= 0);
+  const countNumber = Number(count);
+  const countValid = Number.isInteger(countNumber) && countNumber >= 1 && countNumber <= 200;
+  const currentPreview = previewResult?.bean === selected && previewResult.grams === gramsNumber &&
+    previewResult.generation === previewGeneration && previewResult.translate === t ? previewResult : null;
+  const preview = currentPreview?.label;
 
-  function buildLabelText(bean: BeanListRow, gramsValue: number | null) {
-    const roasteryText = bean.roastery?.trim() || null;
-    const originText = compactLabelText([bean.origin_location, bean.origin_country]);
-    const producerProcessText = compactLabelText([bean.producer, bean.process]);
-    const varietalText = bean.varietal?.trim() || null;
-    const footerText =
-      compactLabelText([
-        `${t('beanLabels.roastDate')}: ${bean.roasted_on ? fmtDate(bean.roasted_on) : t('common.none')}`,
-        gramsValue != null ? t('beanLabels.gramsInline', { grams: String(gramsValue) }) : null,
-      ]) ?? `${t('beanLabels.roastDate')}: ${bean.roasted_on ? fmtDate(bean.roasted_on) : t('common.none')}`;
-
-    return { roasteryText, originText, producerProcessText, varietalText, footerText };
-  }
+  useEffect(() => {
+    if (!selected || !gramsValid) return;
+    let cancelled = false;
+    const source = { bean: selected, grams: gramsNumber, generation: previewGeneration, translate: t };
+    void createLabelPreview(selected, gramsNumber, t).then(label => {
+      if (!cancelled) setPreviewResult({ ...source, label });
+    }).catch(error => {
+      if (!cancelled) setPreviewResult({ ...source, error: error instanceof BeanLabelLayoutError
+        ? t('beanLabels.error.tooLong', { length: String(BEAN_LABEL_DIMENSIONS.maxLengthMm) })
+        : getStorageErrorMessage(error, t('common.loadFailed'), t) });
+    });
+    return () => { cancelled = true; };
+  }, [selected, gramsNumber, gramsValid, previewGeneration, t]);
 
   async function loadLabelHistory(beanUidValue: string) {
+    const request = ++historyRequest.current;
     if (!beanUidValue) {
       setLabelHistory([]);
       return;
@@ -677,25 +720,24 @@ function BeanLabelPrintView({ t, isGuest, beans, initialBeanUid, onBack }: BeanL
       } else {
         const { getSupabaseClient } = await import('../../config/supabase');
         const supabase = getSupabaseClient();
-        const { data, error } = await supabase
+        rows = await fetchAllRows<StoredLabelRow>(() => supabase
           .from('bean_labels')
           .select('uid,bean_uid,grams,created_at')
           .eq('bean_uid', beanUidValue)
           .order('created_at', { ascending: false })
-          .limit(100);
-        if (error) throw new Error(error.message);
-        rows = (data ?? []) as StoredLabelRow[];
+          .order('uid', { ascending: false }));
       }
-      setLabelHistory(groupLabelHistory(rows));
+      if (request === historyRequest.current) setLabelHistory(groupLabelHistory(rows));
     } catch (e) {
-      setMsg({ tone: 'error', text: e instanceof Error ? e.message : t('common.loadFailed') });
+      if (request === historyRequest.current) setMsg({ tone: 'error', text: getStorageErrorMessage(e, t('common.loadFailed'), t) });
     } finally {
-      setHistoryLoading(false);
+      if (request === historyRequest.current) setHistoryLoading(false);
     }
   }
 
   useEffect(() => {
     void loadLabelHistory(beanUid);
+    return () => { historyRequest.current++; };
   }, [beanUid, isGuest]);
 
   useEffect(() => {
@@ -708,55 +750,28 @@ function BeanLabelPrintView({ t, isGuest, beans, initialBeanUid, onBack }: BeanL
     gramsValue?: number | null;
     successText?: string;
   }) {
-    if (!selected) return;
-    const n = options?.countValue ?? Math.max(1, Math.min(200, Number(count) || 0));
-    const g =
-      options && 'gramsValue' in options
-        ? options.gramsValue
-        : grams.trim()
-          ? Number(grams)
-          : NaN;
-    const gramsNum = g == null ? null : Number.isFinite(g) ? g : null;
-
+    if (!selected || isGuest || printPending.current || (!options && !preview)) return;
+    const n = options?.countValue ?? countNumber;
+    const gramsNum = options && 'gramsValue' in options ? options.gramsValue ?? null : gramsNumber;
+    if (!Number.isInteger(n) || n < 1 || n > 200) {
+      setMsg({ tone: 'error', text: t('beanLabels.error.count') });
+      return;
+    }
+    if (gramsNum !== null && (!Number.isFinite(gramsNum) || gramsNum < 0)) {
+      setMsg({ tone: 'error', text: t('beanLabels.error.grams') });
+      return;
+    }
+    printPending.current = true;
     setBusy(true);
     setMsg(null);
     try {
-      const next: LabelPreview[] = [];
-      for (let i = 0; i < n; i++) {
-        const uid = crypto.randomUUID();
-        const url = buildPublicBeanLabelUrl(uid);
-        const qrDataUrl = await toQrDataUrl(url, 160, {
-          errorCorrectionLevel: 'L',
-          margin: 1,
-        });
-        const { roasteryText, originText, producerProcessText, varietalText, footerText } = buildLabelText(selected, gramsNum);
-        const printDataUrl = await renderBeanLabelDataUrl({
-          roasteryText,
-          beanName: selected.bean_name || t('common.none'),
-          originText,
-          producerProcessText,
-          varietalText,
-          footerText,
-          qrDataUrl,
-          qrText: url,
-        });
-        next.push({
-          uid,
-          bean_uid: selected.uid,
-          grams: gramsNum,
-          qrDataUrl,
-          printDataUrl,
-          roasteryText,
-          originText,
-          producerProcessText,
-          varietalText,
-          footerText,
-        });
+      const first = preview?.grams === gramsNum ? preview : await createLabelPreview(selected, gramsNum, t);
+      const next: LabelPreview[] = [first];
+      for (let i = 1; i < n; i++) {
+        next.push(await createLabelPreview(selected, gramsNum, t));
       }
 
-      if (isGuest) {
-        localInsertBeanLabels(next.map((l) => ({ uid: l.uid, bean_uid: l.bean_uid, grams: l.grams })));
-      } else {
+      {
         const { getSupabaseClient } = await import('../../config/supabase');
         const supabase = getSupabaseClient();
         const { error } = await supabase.from('bean_labels').insert(
@@ -769,6 +784,8 @@ function BeanLabelPrintView({ t, isGuest, beans, initialBeanUid, onBack }: BeanL
         if (error) throw new Error(error.message);
       }
 
+      // This UUID now exists in storage. Reserve a new one for the next print.
+      setPreviewGeneration(value => value + 1);
       setLabels(next);
       if (supportsNativePrint) {
         await printBrotherLabels({
@@ -777,12 +794,18 @@ function BeanLabelPrintView({ t, isGuest, beans, initialBeanUid, onBack }: BeanL
         });
         setMsg({ tone: 'success', text: options?.successText ?? t('beanLabels.printedNative') });
       } else {
-        setTimeout(() => window.print(), 50);
+        await new Promise<void>(resolve => window.setTimeout(resolve, 0));
+        await Promise.all(Array.from(document.querySelectorAll<HTMLImageElement>('.print-label-sheet img'))
+          .map(image => image.decode?.()));
+        window.print();
       }
       await loadLabelHistory(selected.uid);
     } catch (e) {
-      setMsg({ tone: 'error', text: e instanceof Error ? e.message : t('common.loadFailed') });
+      setMsg({ tone: 'error', text: e instanceof BeanLabelLayoutError
+        ? t('beanLabels.error.tooLong', { length: String(BEAN_LABEL_DIMENSIONS.maxLengthMm) })
+        : getStorageErrorMessage(e, t('common.loadFailed'), t) });
     } finally {
+      printPending.current = false;
       setBusy(false);
     }
   }
@@ -792,24 +815,35 @@ function BeanLabelPrintView({ t, isGuest, beans, initialBeanUid, onBack }: BeanL
       <style>{`
         @media print {
           .no-print { display: none !important; }
+          .print-label-sheet { display: block !important; }
           .label-sheet { padding: 0 !important; margin: 0 !important; }
           body { background: white !important; }
         }
         .label-sheet {
-          max-width: 50mm;
-          margin: 0 auto;
+          width: 100%;
+          max-width: 100%;
+          overflow-x: auto;
+          padding: 1px;
         }
         .label {
-          /* Brother TZe 24mm tape: 24mm tall with a shorter ~37mm label length to save tape */
-          width: 37mm;
-          height: 24mm;
-          border: 1px solid #e5e7eb;
-          border-radius: 4px;
-          padding: 1.8mm 1.8mm;
+          width: var(--label-width);
+          margin: 0 auto;
+          background: white;
+          outline: 1px solid #e5e7eb;
           display: flex;
-          gap: 1.6mm;
           align-items: center;
+          justify-content: center;
           page-break-inside: avoid;
+        }
+        .label-image {
+          display: block;
+          width: 100%;
+          height: auto;
+          image-rendering: pixelated;
+        }
+        @media print {
+          .label-sheet { overflow: visible; }
+          .label { width: var(--label-print-width); outline: none; }
         }
       `}</style>
 
@@ -825,7 +859,14 @@ function BeanLabelPrintView({ t, isGuest, beans, initialBeanUid, onBack }: BeanL
         </button>
       </div>
 
+      {supportsNativePrint && <BrotherPrinterStatusPanel printerName={printerName} printing={busy} />}
+
       <div className="no-print bg-white p-6 rounded-xl shadow-sm border border-gray-100 space-y-4">
+        {isGuest && (
+          <p role="note" className="text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded-lg p-2">
+            {t('beanLabels.guestQrUnavailable')}
+          </p>
+        )}
         {msg && (
           <div
             className={`text-sm rounded-lg border p-2 ${
@@ -841,7 +882,7 @@ function BeanLabelPrintView({ t, isGuest, beans, initialBeanUid, onBack }: BeanL
         <div className="space-y-3">
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">{t('beanLabels.field.bean')}</label>
-            <select className="w-full p-2 border rounded-lg" value={beanUid} onChange={(e) => setBeanUid(e.target.value)}>
+            <select className="w-full p-2 border rounded-lg" value={beanUid} disabled={busy} onChange={(e) => setBeanUid(e.target.value)}>
               <option value="" disabled>
                 {t('beanLabels.field.bean.placeholder')}
               </option>
@@ -852,15 +893,16 @@ function BeanLabelPrintView({ t, isGuest, beans, initialBeanUid, onBack }: BeanL
               ))}
             </select>
           </div>
-          <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-900">
+          {!supportsNativePrint && <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-900">
             {t('beanLabels.defaultsSummary', { printerName: printerName.trim() || DEFAULT_BROTHER_PRINTER_NAME })}
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-[minmax(0,0.9fr)_minmax(0,0.9fr)_auto] gap-3 items-end">
+          </div>}
+          <div className="grid grid-cols-2 gap-3 items-end">
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">{t('beanLabels.field.grams')}</label>
               <input
                 className="w-full p-2 border rounded-lg"
                 inputMode="decimal"
+                disabled={busy}
                 value={grams}
                 onChange={(e) => setGrams(e.target.value)}
                 placeholder="15"
@@ -871,27 +913,37 @@ function BeanLabelPrintView({ t, isGuest, beans, initialBeanUid, onBack }: BeanL
               <input
                 className="w-full p-2 border rounded-lg"
                 inputMode="numeric"
+                disabled={busy}
                 value={count}
                 onChange={(e) => setCount(e.target.value)}
                 placeholder="4"
               />
             </div>
-            <div className="flex">
-              <button
-                type="button"
-                className="w-full px-3 py-2 rounded-lg bg-amber-700 text-white text-sm hover:bg-amber-800 disabled:bg-gray-300 whitespace-nowrap"
-                onClick={() => void generateAndPrint()}
-                disabled={!selected || busy}
-              >
-                {busy ? t('beanLabels.generatePrinting') : t('beanLabels.generateAndPrint')}
-              </button>
-            </div>
           </div>
-          <p className="text-[11px] text-gray-500">
-            {supportsNativePrint ? t('beanLabels.printerName.help.native') : t('beanLabels.printerName.help.web')}
-          </p>
+          {!gramsValid && <p role="alert" className="text-xs text-red-700">{t('beanLabels.error.grams')}</p>}
+          {!countValid && <p role="alert" className="text-xs text-red-700">{t('beanLabels.error.count')}</p>}
         </div>
       </div>
+
+      {selected && <section className="no-print space-y-3 label-preview" aria-label={t('beanLabels.preview.title')}>
+        <div className="flex items-center justify-between gap-3 text-sm">
+          <h3 className="font-semibold">{t('beanLabels.preview.title')}</h3>
+          {countValid && <span className="text-gray-500">{t('beanLabels.preview.count', { count: String(countNumber) })}</span>}
+        </div>
+        <div className="min-h-[196px]">
+          {currentPreview?.error ? <p role="alert" className="text-sm text-red-700">{currentPreview.error}</p>
+            : !gramsValid ? null : preview ? <div className="label-sheet"><LabelFigure label={preview} t={t} /></div>
+              : <p role="status" className="text-sm text-gray-500">{t('beanLabels.preview.loading')}</p>}
+        </div>
+      </section>}
+
+      <button type="button"
+        className="no-print w-full inline-flex justify-center items-center gap-2 px-3 py-3 rounded-lg bg-amber-700 text-white text-sm hover:bg-amber-800 disabled:bg-gray-300"
+        onClick={() => void generateAndPrint()}
+        disabled={isGuest || !preview || !gramsValid || !countValid || busy}>
+        <Printer size={18} aria-hidden="true" />
+        {busy ? t('beanLabels.generatePrinting') : t('beanLabels.generateAndPrint')}
+      </button>
 
       <div className="no-print bg-white p-6 rounded-xl shadow-sm border border-gray-100 space-y-3">
         <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -930,7 +982,7 @@ function BeanLabelPrintView({ t, isGuest, beans, initialBeanUid, onBack }: BeanL
                         successText: t('beanLabels.reprintedBatch'),
                       });
                     }}
-                    disabled={busy || !selected}
+                    disabled={isGuest || busy || !selected}
                   >
                     {t('beanLabels.history.reprint')}
                   </button>
@@ -941,39 +993,9 @@ function BeanLabelPrintView({ t, isGuest, beans, initialBeanUid, onBack }: BeanL
         )}
       </div>
 
-      {labels.length > 0 && selected && (
-        <div className="label-sheet space-y-2">
-          {labels.map((l) => (
-            <div key={l.uid} className="label bg-white">
-              <div className="min-w-0 flex-1 overflow-hidden">
-                {l.roasteryText && (
-                  <div className="text-[6.5pt] font-semibold uppercase tracking-[0.08em] text-amber-800 truncate">
-                    {l.roasteryText}
-                  </div>
-                )}
-                <div className="text-[8.8pt] font-semibold leading-tight truncate">
-                  {selected.bean_name || t('common.none')}
-                </div>
-                {l.originText && (
-                  <div className="text-[6.4pt] text-gray-700 leading-tight truncate">
-                    {l.originText}
-                  </div>
-                )}
-                {l.producerProcessText && (
-                  <div className="text-[6.2pt] text-gray-600 leading-tight truncate">
-                    {l.producerProcessText}
-                  </div>
-                )}
-                {l.varietalText && (
-                  <div className="text-[6.1pt] text-gray-500 leading-tight truncate">
-                    {l.varietalText}
-                  </div>
-                )}
-                <div className="text-[6.2pt] text-gray-500 leading-tight">{l.footerText}</div>
-              </div>
-              <img src={l.qrDataUrl} alt={t('beanLabels.qrAlt')} className="w-[18mm] h-[18mm]" />
-            </div>
-          ))}
+      {labels.length > 0 && (
+        <div className="print-label-sheet label-sheet space-y-2" style={{ display: 'none' }} aria-hidden="true">
+          {labels.map(label => <LabelFigure key={label.uid} label={label} t={t} forPrint />)}
         </div>
       )}
     </div>

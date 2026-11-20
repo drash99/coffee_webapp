@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import type { FlavorNote } from '../types';
-import { getNodeByPath, getTopLevelColor, SCA_FLAVOR_WHEEL } from '../scaFlavorWheel';
+import { useEffect, useRef, useState } from 'react';
+import type { BeverageType, FlavorNote } from '../types';
+import { beverageFlavorLabel, beverageFlavorWheels } from '../beverageFlavorWheels';
 import { useI18n } from '../../i18n/I18nProvider';
 
 type Props = {
@@ -8,13 +8,18 @@ type Props = {
   value: FlavorNote[];
   onChange: (next: FlavorNote[]) => void;
   maxNotes?: number;
+  beverageType?: BeverageType;
 };
 
 function noteKey(note: FlavorNote): string {
   return note.path.join(' > ');
 }
 
-export function FlavorWheelPicker({ label, value, onChange, maxNotes = 5 }: Props) {
+export function FlavorWheelPicker({ label, value, onChange, maxNotes = 5, beverageType = 'coffee' }: Props) {
+  return <CascadingPicker key={beverageType} {...{ label, value, onChange, maxNotes, beverageType }} />;
+}
+
+function CascadingPicker({ label, value, onChange, maxNotes, beverageType }: Required<Props>) {
   const { t } = useI18n();
   const topLevel = value;
 
@@ -24,19 +29,13 @@ export function FlavorWheelPicker({ label, value, onChange, maxNotes = 5 }: Prop
   const [l2, setL2] = useState<string>('');
   const [l3, setL3] = useState<string>('');
 
-  const level1Options = useMemo(() => ['N/A', ...SCA_FLAVOR_WHEEL.map((n) => n.name)], []);
-
-  const level2Options = (() => {
-    if (!l1 || l1 === 'N/A') return [];
-    const node = getNodeByPath([l1]);
-    return (node?.children ?? []).map((c) => c.name);
-  })();
-
-  const level3Options = (() => {
-    if (!l1 || !l2 || l1 === 'N/A') return [];
-    const node = getNodeByPath([l1, l2]);
-    return (node?.children ?? []).map((c) => c.name);
-  })();
+  const wheel = beverageFlavorWheels[beverageType];
+  const level1Options = ['N/A', ...wheel.map(node => node.name)];
+  const branch = wheel.find(node => node.name === l1);
+  const level2Options = branch?.children?.map(node => node.name) ?? [];
+  const level3Options = branch?.children?.find(node => node.name === l2)?.children?.map(node => node.name) ?? [];
+  const colorOf = (name: string) => wheel.find(node => node.name === name)?.color ?? '#9ca3af';
+  const display = (name: string) => beverageFlavorLabel(name, beverageType, t);
 
   function resetLower(level: 1 | 2) {
     if (level === 1) {
@@ -50,7 +49,7 @@ export function FlavorWheelPicker({ label, value, onChange, maxNotes = 5 }: Prop
   function addCurrent() {
     if (!l1) return;
     const path = l1 === 'N/A' ? ['N/A'] : l3 ? [l1, l2, l3].filter(Boolean) : l2 ? [l1, l2] : [l1];
-    const color = getTopLevelColor(path[0] ?? 'Other');
+    const color = colorOf(path[0]);
     const nextNote: FlavorNote = { path, color };
 
     const existingKeys = new Set(value.map(noteKey));
@@ -150,20 +149,8 @@ export function FlavorWheelPicker({ label, value, onChange, maxNotes = 5 }: Prop
     );
   }
 
-  const level1DotOptions: DotOption[] = useMemo(
-    () => level1Options.map((name) => ({ value: name, label: name, color: getTopLevelColor(name) })),
-    [level1Options]
-  );
-
-  const level2DotOptions: DotOption[] = useMemo(() => {
-    const color = l1 ? getTopLevelColor(l1) : '#d1d5db';
-    return level2Options.map((name) => ({ value: name, label: name, color }));
-  }, [level2Options, l1]);
-
-  const level3DotOptions: DotOption[] = useMemo(() => {
-    const color = l1 ? getTopLevelColor(l1) : '#d1d5db';
-    return level3Options.map((name) => ({ value: name, label: name, color }));
-  }, [level3Options, l1]);
+  const level1DotOptions = level1Options.map(name => ({ value: name, label: display(name), color: colorOf(name) }));
+  const detailOptions = (options: string[]) => options.map(name => ({ value: name, label: display(name), color: colorOf(l1) }));
 
   return (
     <div className="space-y-2">
@@ -174,7 +161,7 @@ export function FlavorWheelPicker({ label, value, onChange, maxNotes = 5 }: Prop
         </div>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+      <div className={`grid gap-2 ${beverageType === 'coffee' ? 'grid-cols-1 sm:grid-cols-3' : 'grid-cols-2'}`}>
         <DotDropdown
           value={l1}
           onChange={(v) => {
@@ -192,18 +179,18 @@ export function FlavorWheelPicker({ label, value, onChange, maxNotes = 5 }: Prop
             setL2(v);
             resetLower(2);
           }}
-          options={level2DotOptions}
+          options={detailOptions(level2Options)}
           placeholder={l1 ? t('flavorPicker.placeholder.narrow') : t('flavorPicker.placeholder.none')}
-          disabled={!canAddMore || !l1 || l1 === 'N/A' || level2DotOptions.length === 0}
+          disabled={!canAddMore || !level2Options.length}
         />
 
-        <DotDropdown
+        {beverageType === 'coffee' && <DotDropdown
           value={l3}
           onChange={(v) => setL3(v)}
-          options={level3DotOptions}
+          options={detailOptions(level3Options)}
           placeholder={l2 ? t('flavorPicker.placeholder.specific') : t('flavorPicker.placeholder.none')}
-          disabled={!canAddMore || !l2 || level3DotOptions.length === 0}
-        />
+          disabled={!canAddMore || !level3Options.length}
+        />}
       </div>
 
       <div className="flex items-center gap-2 flex-wrap">
@@ -215,9 +202,9 @@ export function FlavorWheelPicker({ label, value, onChange, maxNotes = 5 }: Prop
         >
           {t('flavorPicker.addNote')}
         </button>
-        <div className="text-xs text-gray-500">
+        {beverageType === 'coffee' && <div className="text-xs text-gray-500">
           {t('flavorPicker.tip')}
-        </div>
+        </div>}
       </div>
 
       {value.length > 0 && (
@@ -231,7 +218,7 @@ export function FlavorWheelPicker({ label, value, onChange, maxNotes = 5 }: Prop
               title={t('flavorPicker.removeTitle')}
             >
               <span className="inline-block w-2 h-2 rounded-full" style={{ backgroundColor: note.color }} />
-              <span className="text-gray-800">{note.path.join(' / ')}</span>
+              <span className="text-gray-800 break-words">{note.path.map(display).join(' / ')}</span>
               <span className="text-gray-400">×</span>
             </button>
           ))}

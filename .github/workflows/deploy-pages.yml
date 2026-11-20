@@ -34,6 +34,26 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Lint
+        run: npm run lint
+
+      - name: Test app behavior
+        run: npm test
+
+      - name: Type-check app and tests
+        run: npm run test:typecheck
+
+      - name: Test image analysis
+        run: npm run test:cv
+
+      - name: Install PostgreSQL test tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes postgresql libpq-dev
+
+      - name: Test database security and transactions
+        run: npm run test:db
+
       - name: Build app
         run: npm run build
         env:

@@ -6,7 +6,11 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
+    "lint": "eslint src tests --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
+    "test": "vitest run",
+    "test:typecheck": "tsc -p tsconfig.test.json",
+    "test:cv": "node --test tests/cv-regression.test.cjs",
+    "test:db": "node scripts/test-database.mjs",
     "preview": "vite preview",
     "publish": "npm run build && npx gh-pages -d dist -r git@github.com:drash99/drash99.github.io.git -b main",
     "cap:sync": "npm run build && npx cap sync && node scripts/ensureBrotherPrinterCapConfig.mjs",
@@ -34,6 +38,7 @@
   },
   "devDependencies": {
     "@capacitor/cli": "^8.1.0",
+    "@testing-library/react": "^16.3.3",
     "@types/qrcode": "^1.5.6",
     "@types/react": "^18.2.43",
     "@types/react-dom": "^18.2.17",
@@ -45,10 +50,12 @@
     "eslint-plugin-react-hooks": "^4.6.0",
     "eslint-plugin-react-refresh": "^0.4.5",
     "gh-pages": "^6.1.1",
+    "jsdom": "^26.1.0",
     "postcss": "^8.4.32",
     "tailwindcss": "^3.4.0",
     "typescript": "^5.2.2",
     "vite": "^5.0.8",
-    "vite-plugin-pwa": "^0.17.4"
+    "vite-plugin-pwa": "^0.17.4",
+    "vitest": "^3.2.7"
   }
 }

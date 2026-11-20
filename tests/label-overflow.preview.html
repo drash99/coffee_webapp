@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BeanLog Adaptive Label Preview</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #f3f5f7; color: #182127; font-family: -apple-system, BlinkMacSystemFont, sans-serif; }
+    main { max-width: 840px; margin: 0 auto; padding: 24px 16px; }
+    h1 { font-size: 23px; line-height: 30px; margin: 0 0 8px; }
+    .intro { color: #56616b; font-size: 13px; line-height: 20px; margin: 0 0 20px; }
+    article { padding: 16px 0; border-top: 1px solid #dbe1e6; min-width: 0; }
+    h2 { font-size: 14px; line-height: 18px; margin: 0 0 10px; }
+    .scroll { overflow-x: auto; padding: 1px; }
+    .tape { display: flex; align-items: center; background: white; outline: 1px solid #cbd2d9; }
+    .tape img { display: block; width: 100%; height: auto; image-rendering: pixelated; }
+    .handling { margin: 10px 0 0; font-size: 12px; line-height: 18px; color: #344c40; }
+    output { display: block; margin-top: 16px; font-size: 12px; color: #385d46; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>정보를 생략하지 않는 라벨</h1>
+    <p class="intro">24mm 테이프 · 내용에 맞춘 길이 · 실제 출력 이미지 / 샘플 데이터</p>
+    <div id="samples"></div>
+    <output id="result">렌더링 중...</output>
+  </main>
+  <script type="module">
+    import { renderBeanLabelImages, BEAN_LABEL_DIMENSIONS, BeanLabelLayoutError } from '/src/logging/utils/beanLabelImage.ts';
+    import 'galmuri/dist/galmuri.css';
+
+    const base = {
+      roasteryText: 'BeanLog Roasters', beanName: 'Panama Geisha',
+      details: [
+        { label: '산지', value: 'Panama · Boquete' },
+        { label: '생산자', value: 'Finca Test' },
+        { label: '가공', value: 'Washed' },
+        { label: '품종', value: 'Geisha' },
+      ],
+      footerText: '로스팅 날짜: 2026-11-01 · 15g',
+      qrDataUrl: '', qrText: 'https://drash99.github.io/label.html?label=20000000-0000-4000-8000-000000000001',
+    };
+    const long = {
+      roasteryText: '서울 성수동 스페셜티 커피 로스터리 프라이빗 리저브 에디션',
+      beanName: '파나마 보케테 핀카 데보라 게이샤 리미티드 리저브 무산소 내추럴 특별 한정판',
+      details: [
+        { label: '산지', value: '에티오피아 남부 게데오 존 게뎁 워르카 첼베사 고산지대' },
+        { label: '생산자', value: 'Finca Deborah Jamison Savage' },
+        { label: '가공', value: 'Anaerobic Natural Extended Fermentation 120 hours' },
+        { label: '품종', value: 'Geisha / Caturra / Yellow Bourbon / SL28 / SL34 / Ethiopian Heirloom' },
+      ],
+    };
+    const detailPatch = index => ({ details: base.details.map((detail, i) => i === index ? long.details[i] : detail) });
+    const samples = [
+      { title: '1. 기본 길이', patch: {} },
+      { title: '2. 긴 원두명', patch: { beanName: long.beanName } },
+      { title: '3. 긴 로스터명', patch: { roasteryText: long.roasteryText } },
+      { title: '4. 긴 산지', patch: detailPatch(0) },
+      { title: '5. 긴 생산자', patch: detailPatch(1) },
+      { title: '6. 긴 가공법', patch: detailPatch(2) },
+      { title: '7. 긴 품종 목록', patch: detailPatch(3) },
+      { title: '8. 날짜·중량 고정 형식', patch: { footerText: '로스팅 날짜: 2026-11-01 · 1000g' } },
+      { title: '9. 공백 없는 긴 원두명', patch: { beanName: '에티오피아예가체프게뎁워르카첼베사스페셜셀렉션리미티드에디션' } },
+      { title: '10. 모든 항목을 길게', patch: long },
+      { title: '11. 너무 긴 입력', patch: { beanName: '한정판'.repeat(200) }, expectedError: true },
+    ];
+    const compact = text => text.replace(/\s/g, '');
+    const results = [];
+    let overflows = 0;
+    let missing = 0;
+    let pixelMismatches = 0;
+    let unexpectedErrors = 0;
+    for (const sample of samples) {
+      const content = { ...base, ...sample.patch };
+      const calls = [];
+      const original = CanvasRenderingContext2D.prototype.fillText;
+      CanvasRenderingContext2D.prototype.fillText = function(text, x, y, ...rest) {
+        calls.push({ text, x, y, right: x + this.measureText(text).width });
+        return original.call(this, text, x, y, ...rest);
+      };
+      let images;
+      let error;
+      try { images = await renderBeanLabelImages(content); }
+      catch (caught) { error = caught; }
+      finally { CanvasRenderingContext2D.prototype.fillText = original; }
+      const article = document.createElement('article');
+      const title = document.createElement('h2');
+      title.textContent = sample.title;
+      article.append(title);
+      const handling = document.createElement('p');
+      handling.className = 'handling';
+      if (!images) {
+        if (!sample.expectedError || !(error instanceof BeanLabelLayoutError)) unexpectedErrors++;
+        handling.textContent = error instanceof BeanLabelLayoutError
+          ? '100mm 이내에 전체 내용을 담을 수 없어 인쇄 중단. 내용은 자동으로 생략되지 않음.'
+          : String(error);
+      } else {
+        if (sample.expectedError) unexpectedErrors++;
+        const footer = calls.at(-1);
+        const body = calls.slice(0, -1);
+        const expected = [content.roasteryText, content.beanName, ...content.details.map(d => `${d.label}: ${d.value}`)].join('');
+        if (compact(body.map(call => call.text).join('')) !== compact(expected) || footer.text !== content.footerText) missing++;
+        overflows += body.filter(call => call.right > images.lengthDots - 106 || call.y + 15 > 114).length;
+        overflows += footer.right > images.lengthDots - 8 ? 1 : 0;
+        const scroll = document.createElement('div');
+        scroll.className = 'scroll';
+        const tape = document.createElement('div');
+        tape.className = 'tape';
+        tape.style.width = `${images.lengthDots}px`;
+        const lengthMm = images.lengthDots * 25.4 / BEAN_LABEL_DIMENSIONS.dpi;
+        tape.style.aspectRatio = `${lengthMm} / ${BEAN_LABEL_DIMENSIONS.tapeWidthMm}`;
+        const image = new Image();
+        image.src = images.previewDataUrl;
+        image.alt = sample.title;
+        await image.decode();
+        tape.append(image);
+        scroll.append(tape);
+        article.append(scroll);
+        handling.textContent = `${lengthMm.toFixed(1)} × 24mm · 모든 항목 보존 · 글자 크기 유지`;
+        const portrait = new Image();
+        portrait.src = images.printDataUrl;
+        await portrait.decode();
+        const readPixels = img => {
+          const canvas = document.createElement('canvas');
+          canvas.width = img.naturalWidth;
+          canvas.height = img.naturalHeight;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0);
+          return ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+        };
+        const landscapePixels = readPixels(image);
+        const portraitPixels = readPixels(portrait);
+        let blackPixels = 0;
+        for (let y = 0; y < 128; y++) for (let x = 0; x < images.lengthDots; x++) {
+          const source = (y * images.lengthDots + x) * 4;
+          const target = (x * 128 + 127 - y) * 4;
+          if (landscapePixels[source] === 0) blackPixels++;
+          for (let c = 0; c < 4; c++) if (landscapePixels[source + c] !== portraitPixels[target + c]) pixelMismatches++;
+        }
+        if (blackPixels < 1000) unexpectedErrors++;
+        results.push({ title: sample.title, image, lengthMm });
+      }
+      article.append(handling);
+      document.getElementById('samples').append(article);
+    }
+    const status = `${samples.length}개 예시 확인 · 정보 누락 ${missing} · 영역 초과 ${overflows} · 인쇄 이미지 불일치 ${pixelMismatches} · 예상 밖 오류 ${unexpectedErrors}`;
+    document.getElementById('result').textContent = status;
+
+    const comparison = document.createElement('canvas');
+    comparison.width = 840;
+    comparison.height = 825;
+    const context = comparison.getContext('2d');
+    context.fillStyle = '#f3f5f7';
+    context.fillRect(0, 0, comparison.width, comparison.height);
+    context.textBaseline = 'top';
+    context.fillStyle = '#182127';
+    context.font = 'bold 23px -apple-system, sans-serif';
+    context.fillText('내용에 따라 길어지는 24mm 라벨', 28, 24);
+    context.fillStyle = '#56616b';
+    context.font = '13px -apple-system, sans-serif';
+    context.fillText('같은 배율 · 실제 출력 비트맵 · 날짜 고정 형식 / 다른 항목은 이름과 전체 값 표시', 28, 62);
+    for (const [i, result] of [results[0], results[1], results[9]].entries()) {
+      const y = 100 + i * 230;
+      context.fillStyle = '#182127';
+      context.font = 'bold 14px -apple-system, sans-serif';
+      context.fillText(`${result.title}  /  ${result.lengthMm.toFixed(1)} × 24mm`, 28, y);
+      const tapeHeight = result.image.naturalWidth * 24 / result.lengthMm;
+      context.fillStyle = 'white';
+      context.fillRect(28, y + 30, result.image.naturalWidth, tapeHeight);
+      context.strokeStyle = '#cbd2d9';
+      context.strokeRect(27.5, y + 29.5, result.image.naturalWidth + 1, tapeHeight + 1);
+      context.imageSmoothingEnabled = false;
+      context.drawImage(result.image, 28, y + 30 + (tapeHeight - 128) / 2);
+    }
+    context.fillStyle = '#385d46';
+    context.font = '12px -apple-system, sans-serif';
+    context.fillText(status, 28, 800);
+    const contactSheet = new Image();
+    contactSheet.id = 'comparison-export';
+    contactSheet.src = comparison.toDataURL('image/png');
+    contactSheet.alt = '항목별 라벨 비교 이미지';
+    contactSheet.hidden = true;
+    document.body.append(contactSheet);
+  </script>
+</body>
+</html>

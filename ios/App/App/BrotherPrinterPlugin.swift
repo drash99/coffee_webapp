@@ -51,11 +51,14 @@ public class BrotherPrinterPlugin: CAPPlugin, CAPBridgedPlugin {
     public let identifier = "BrotherPrinterPlugin"
     public let jsName = "BrotherPrinter"
     public let pluginMethods: [CAPPluginMethod] = [
-        CAPPluginMethod(name: "printLabels", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "printLabels", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "getStatus", returnType: CAPPluginReturnPromise)
     ]
 
     private let bleSearchSeconds: TimeInterval = 6
     private let maxDiagnosticCandidates = 6
+    private let printQueue = DispatchQueue(label: "com.beanlog.brother-print", qos: .userInitiated)
+    private var cachedPrinter: (requestedName: String, candidate: PrinterCandidate)?
 
     override public func load() {
         super.load()
@@ -78,7 +81,7 @@ public class BrotherPrinterPlugin: CAPPlugin, CAPBridgedPlugin {
             return
         }
 
-        DispatchQueue.global(qos: .userInitiated).async {
+        printQueue.async {
             do {
                 try self.performPrint(request: request)
                 DispatchQueue.main.async {
@@ -92,26 +95,76 @@ public class BrotherPrinterPlugin: CAPPlugin, CAPBridgedPlugin {
         }
     }
 
+    @objc func getStatus(_ call: CAPPluginCall) {
+        let printerName = trimmed(call.getString("printerName"))
+        // Status reads and print jobs share a queue so they never open competing channels.
+        printQueue.async {
+            var payload: [String: Any] = [
+                "printerName": printerName,
+                "connection": "unreachable",
+            ]
+            do {
+                let (candidate, driver) = try self.connectToPrinter(named: printerName)
+                defer { driver.closeChannel() }
+                let result = driver.getPrinterStatus()
+                guard result.error.code == .noError, let status = result.status else {
+                    self.cachedPrinter = nil
+                    throw BrotherPrinterError(lines: ["Printer status request failed."])
+                }
+                payload = self.printerStatusPayload(status)
+                payload["connection"] = "connected"
+                payload["printerName"] = candidate.displayName
+                payload["transport"] = self.describeChannelType(candidate.channelType)
+            } catch {
+                payload["connection"] = (error as? BrotherPrinterError)?.connectionState ?? "unreachable"
+            }
+            payload["checkedAt"] = Date().timeIntervalSince1970 * 1000
+            let response = payload
+            DispatchQueue.main.async { call.resolve(response) }
+        }
+    }
+
+    private func printerStatusPayload(_ status: BRLMPrinterStatus) -> [String: Any] {
+        let state: String
+        switch status.errorCode {
+        case .noError: state = "ready"
+        case .noPaper: state = "noPaper"
+        case .coverOpen: state = "coverOpen"
+        case .busy: state = "busy"
+        case .paperJam: state = "paperJam"
+        case .highVoltageAdapter: state = "highVoltageAdapter"
+        case .batteryEmpty: state = "batteryEmpty"
+        case .batteryTrouble: state = "batteryTrouble"
+        case .tubeNotDetected: state = "tubeNotDetected"
+        case .motorSlow: state = "motorSlow"
+        case .unsupportedCharger: state = "unsupportedCharger"
+        case .incompatibleOptionalEquipment: state = "incompatibleEquipment"
+        case .systemError: state = "systemError"
+        case .anotherError: state = "otherError"
+        @unknown default: state = "otherError"
+        }
+        var payload: [String: Any] = ["state": state]
+        if let battery = status.batteryStatus {
+            var batteryInfo: [String: Any] = [:]
+            let fraction = battery.chargeLevel
+            if fraction.max > 0, fraction.current >= 0, fraction.current <= fraction.max {
+                batteryInfo["level"] = Int(fraction.current)
+                batteryInfo["maxLevel"] = Int(fraction.max)
+            }
+            if battery.charging != .unknown { batteryInfo["charging"] = battery.charging == .yes }
+            if battery.batteryMounted != .unknown { batteryInfo["mounted"] = battery.batteryMounted == .yes }
+            payload["battery"] = batteryInfo
+        }
+        if let media = status.mediaInfo, media.width_mm > 0 {
+            payload["media"] = ["widthMm": Int(media.width_mm)]
+        }
+        return payload
+    }
+
     private func performPrint(request: BrotherPrintRequest) throws {
         let printerName = trimmed(request.printerName)
-        let discovery = runOnMain {
-            discoverPrinters()
-        }
-
-        guard let selectedCandidate = selectCandidate(from: discovery, requestedPrinterName: printerName) else {
-            throw BrotherPrinterError(lines: buildDiscoveryFailureLines(discovery: discovery, requestedPrinterName: printerName))
-        }
-
+        let (selectedCandidate, driver) = try connectToPrinter(named: printerName)
         let printerModel = detectPrinterModel(candidate: selectedCandidate, requestedPrinterName: printerName)
-        let openResult = BRLMPrinterDriverGenerator.open(selectedCandidate.channel)
-        guard openResult.error.code == BRLMOpenChannelErrorCode.noError, let driver = openResult.driver else {
-            throw BrotherPrinterError(lines: buildOpenFailureLines(
-                discovery: discovery,
-                candidate: selectedCandidate,
-                requestedPrinterName: printerName,
-                error: openResult.error
-            ))
-        }
 
         defer {
             driver.closeChannel()
@@ -119,10 +172,9 @@ public class BrotherPrinterPlugin: CAPPlugin, CAPBridgedPlugin {
 
         let settings = try buildPrintSettings(printerModel: printerModel)
         let images = try request.labels.map { try decodeCGImage(from: $0.pngDataUrl) }
-        if let printError = printImages(images, driver: driver, settings: settings),
-           printError.code != BRLMPrintErrorCode.noError {
+        let printError = printImages(images, driver: driver, settings: settings)
+        if printError.code != BRLMPrintErrorCode.noError {
             throw BrotherPrinterError(lines: buildPrintFailureLines(
-                discovery: discovery,
                 candidate: selectedCandidate,
                 requestedPrinterName: printerName,
                 error: printError
@@ -130,9 +182,33 @@ public class BrotherPrinterPlugin: CAPPlugin, CAPBridgedPlugin {
         }
     }
 
+    private func connectToPrinter(named printerName: String) throws -> (PrinterCandidate, BRLMPrinterDriver) {
+        if let cached = cachedPrinter, cached.requestedName == printerName {
+            let result = BRLMPrinterDriverGenerator.open(cached.candidate.channel)
+            if result.error.code == .noError, let driver = result.driver {
+                return (cached.candidate, driver)
+            }
+            cachedPrinter = nil
+        }
+        let discovery = discoverPrinters()
+        guard let candidate = selectCandidate(from: discovery, requestedPrinterName: printerName) else {
+            throw BrotherPrinterError(lines: buildDiscoveryFailureLines(discovery: discovery, requestedPrinterName: printerName), connectionState: "notFound")
+        }
+        let result = BRLMPrinterDriverGenerator.open(candidate.channel)
+        guard result.error.code == .noError, let driver = result.driver else {
+            throw BrotherPrinterError(lines: buildOpenFailureLines(
+                discovery: discovery, candidate: candidate, requestedPrinterName: printerName, error: result.error
+            ))
+        }
+        cachedPrinter = (printerName, candidate)
+        return (candidate, driver)
+    }
+
     private func discoverPrinters() -> DiscoverySnapshot {
-        BRPtouchBluetoothManager.shared().registerForBRDeviceNotifications()
-        let pairedCandidates = fetchPairedCandidates()
+        let pairedCandidates = runOnMain {
+            BRPtouchBluetoothManager.shared().registerForBRDeviceNotifications()
+            return fetchPairedCandidates()
+        }
 
         let bluetoothResult = BRLMPrinterSearcher.startBluetoothSearch()
         let bluetoothCandidates = bluetoothResult.channels.map {
@@ -141,12 +217,8 @@ public class BrotherPrinterPlugin: CAPPlugin, CAPBridgedPlugin {
 
         let bleOption = BRLMBLESearchOption()
         bleOption.searchDuration = bleSearchSeconds
-        var bleDiscoveredChannels: [BRLMChannel] = []
-        let bleResult = BRLMPrinterSearcher.startBLESearch(bleOption) { channel in
-            bleDiscoveredChannels.append(channel)
-        }
-        let bleChannels = bleDiscoveredChannels + bleResult.channels
-        let bleCandidates = bleChannels.map {
+        let bleResult = BRLMPrinterSearcher.startBLESearch(bleOption, callback: nil)
+        let bleCandidates = bleResult.channels.map {
             makeSearchCandidate(channel: $0, source: "BLE search")
         }
 
@@ -253,7 +325,7 @@ public class BrotherPrinterPlugin: CAPPlugin, CAPBridgedPlugin {
             candidate.matchFields.contains { field in
                 let normalizedField = normalizedPrinterName(field)
                 return aliases.contains(where: { alias in
-                    !alias.isEmpty && (normalizedField.contains(alias) || alias.contains(normalizedField))
+                    !alias.isEmpty && !normalizedField.isEmpty && normalizedField.contains(alias)
                 })
             }
         }
@@ -289,7 +361,7 @@ public class BrotherPrinterPlugin: CAPPlugin, CAPBridgedPlugin {
             candidate.matchFields.contains { field in
                 let normalizedField = normalizedPrinterName(field)
                 return aliases.contains(where: { alias in
-                    !alias.isEmpty && (normalizedField.contains(alias) || alias.contains(normalizedField))
+                    !alias.isEmpty && !normalizedField.isEmpty && normalizedField.contains(alias)
                 })
             }
         })
@@ -323,6 +395,7 @@ public class BrotherPrinterPlugin: CAPPlugin, CAPBridgedPlugin {
         settings.labelSize = preferredLabelSize(for: printerModel)
         settings.autoCut = true
         settings.cutPause = false
+        // A batch is one job: finish/feed/cut the final label exactly once.
         settings.chainPrint = false
         settings.halfCut = false
         settings.autoCutForEachPageCount = 1
@@ -389,7 +462,6 @@ public class BrotherPrinterPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func buildPrintFailureLines(
-        discovery: DiscoverySnapshot,
         candidate: PrinterCandidate,
         requestedPrinterName: String,
         error: BRLMPrintError
@@ -409,7 +481,6 @@ public class BrotherPrinterPlugin: CAPPlugin, CAPBridgedPlugin {
             lines.append(contentsOf: logs)
         }
 
-        lines.append(pairedDevicesLine(discovery.pairedCandidates))
         return lines
     }
 
@@ -440,14 +511,12 @@ public class BrotherPrinterPlugin: CAPPlugin, CAPBridgedPlugin {
         _ images: [CGImage],
         driver: BRLMPrinterDriver,
         settings: BRLMPTPrintSettings
-    ) -> BRLMPrintError? {
-        for cgImage in images {
-            let printError = driver.printImage(with: cgImage, settings: settings)
-            if printError.code != BRLMPrintErrorCode.noError {
-                return printError
-            }
+    ) -> BRLMPrintError {
+        // One SDK call preserves page order without restarting the feed for every label.
+        let pages: [BRLMPrinterDriver.PrintImageClosure] = images.map { image in
+            { Unmanaged.passUnretained(image) }
         }
-        return nil
+        return driver.printImage(withClosures: pages, settings: settings)
     }
 
     private func describeCandidate(_ candidate: PrinterCandidate) -> String {
@@ -612,6 +681,7 @@ public class BrotherPrinterPlugin: CAPPlugin, CAPBridgedPlugin {
 
 private struct BrotherPrinterError: LocalizedError {
     let lines: [String]
+    var connectionState: String = "unreachable"
 
     var errorDescription: String? {
         lines

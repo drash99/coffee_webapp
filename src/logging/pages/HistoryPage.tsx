@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ClipboardCopy } from 'lucide-react';
 import type { AppUser } from '../../auth/types';
 import { getSupabaseClient } from '../../config/supabase';
@@ -10,6 +10,12 @@ import { NoteDotsList } from '../components/NoteDotsList';
 import { StarRating } from '../components/StarRating';
 import { useGrinderSuggestions } from '../hooks/useGrinderSuggestions';
 import { toNullableNumber, fmtDate, isoToYmd, unique } from '../utils/formatting';
+import { fetchAllRows } from '../utils/pagination';
+import { saveCloudData } from '../storage/cloudDb';
+import { beverageTypeOf } from '../utils/beverage';
+import { prepareGrinder, type PreparedGrinder } from '../utils/grinder';
+import { getStorageErrorMessage } from '../utils/storageError';
+import { validateLocalData } from '../storage/localDataValidation';
 import { beanDisplayLabel } from '../utils/beanLabel';
 import { downloadBrewAsPng } from '../utils/brewPng';
 import { buildPublicBrewShareUrl } from '../utils/publicLinks';
@@ -21,10 +27,9 @@ import { requestBrewGuidance, type AiGuidance } from '../ai/customServerClient';
 import {
   localListBrewsWithBeans,
   localListBeans,
-  localGetOrCreateGrinder,
-  localUpdateBrew,
+  localGetAllData,
+  localSaveData,
   localDeleteBrew,
-  localListGrinders,
 } from '../storage';
 
 type Props = {
@@ -45,6 +50,7 @@ type SavedBeanOption = Pick<
   | 'varietal'
   | 'roasted_on'
   | 'cup_flavor_notes'
+  | 'beverage_type'
 >;
 
 type BrewWithBean = BrewRow & {
@@ -60,6 +66,7 @@ type BrewWithBean = BrewRow & {
     | 'varietal'
     | 'roasted_on'
     | 'cup_flavor_notes'
+    | 'beverage_type'
   > | null;
   grinders: Pick<GrinderRow, 'uid' | 'maker' | 'model'> | null;
 };
@@ -139,6 +146,7 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
   const aiEnabled = getPlatform() === 'ios';
   const [rows, setRows] = useState<BrewWithBean[]>([]);
   const [savedBeans, setSavedBeans] = useState<SavedBeanOption[]>([]);
+  const [guestGrinders, setGuestGrinders] = useState<GrinderRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedUid, setSelectedUid] = useState<string | null>(null);
@@ -161,13 +169,15 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
   const [aiCopiedMsg, setAiCopiedMsg] = useState<string | null>(null);
   const [aiIsCached, setAiIsCached] = useState(false);
   const [deleteBusy, setDeleteBusy] = useState(false);
+  const selectionVersion = useRef(0);
+  const pendingGrinder = useRef<{ brewUid: string; row: PreparedGrinder } | null>(null);
 
   // --- Suggestions ---
   const hookGrinderSugg = useGrinderSuggestions(isGuest ? undefined : user.uid);
 
   const guestGrinderSugg = useMemo(() => {
     if (!isGuest) return null;
-    const grinders = localListGrinders();
+    const grinders = guestGrinders;
     const makers = Array.from(new Map(grinders.map((g) => [(g.maker ?? '').toLowerCase(), g.maker ?? ''])).values())
       .filter(Boolean)
       .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
@@ -181,14 +191,12 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
           .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
       },
     };
-  }, [isGuest]);
+  }, [isGuest, guestGrinders]);
 
   const makers = isGuest ? (guestGrinderSugg?.makers ?? []) : hookGrinderSugg.makers;
   const modelsForMaker = isGuest
     ? (m: string) => guestGrinderSugg?.modelsForMaker(m) ?? []
     : hookGrinderSugg.modelsForMaker;
-
-  const selected = useMemo(() => rows.find((r) => r.uid === selectedUid) ?? null, [rows, selectedUid]);
 
   function draftFromBrew(brew: BrewWithBean): BrewEditDraft {
     return {
@@ -266,21 +274,24 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
     next.sort((a, b) => {
       const ta = new Date(a.brew_date).getTime();
       const tb = new Date(b.brew_date).getTime();
-      if (sortMode === 'date_desc') return tb - ta;
-      if (sortMode === 'date_asc') return ta - tb;
+      const tie = (b.created_at ?? '').localeCompare(a.created_at ?? '') || b.uid.localeCompare(a.uid);
+      if (sortMode === 'date_desc') return tb - ta || tie;
+      if (sortMode === 'date_asc') return ta - tb || -tie;
       if (sortMode === 'rating_desc') {
         const ra = a.rating == null ? -1 : Number(a.rating);
         const rb = b.rating == null ? -1 : Number(b.rating);
         if (rb !== ra) return rb - ra;
-        return tb - ta;
+        return tb - ta || tie;
       }
       const ra = a.rating == null ? Number.POSITIVE_INFINITY : Number(a.rating);
       const rb = b.rating == null ? Number.POSITIVE_INFINITY : Number(b.rating);
       if (ra !== rb) return ra - rb;
-      return ta - tb;
+      return ta - tb || -tie;
     });
     return next;
   }, [filteredRows, sortMode]);
+
+  const selected = sortedRows.find((r) => r.uid === selectedUid) ?? sortedRows[0] ?? null;
 
   const activeFilterCount =
     Object.entries(filters).reduce((count, [key, v]) => {
@@ -297,12 +308,14 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
     setLoading(true);
     try {
       if (isGuest) {
+        const localData = localGetAllData();
+        validateLocalData(localData, { allowOrphanLabels: true });
         const data = localListBrewsWithBeans();
-        setRows(data as BrewWithBean[]);
-        if (data.length > 0 && !selectedUid) setSelectedUid(data[0]?.uid ?? null);
+        setGuestGrinders(localData.grinders);
+        setRows(data.filter(row => beverageTypeOf(row.beans) === 'coffee'));
       } else {
         const supabase = getSupabaseClient();
-        const { data, error: err } = await supabase
+        const data = await fetchAllRows<BrewWithBean>(() => supabase
           .from('brews')
           .select(
             `
@@ -323,17 +336,17 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
             taste_note,
             taste_flavor_notes,
             created_at,
-            beans ( uid, bean_name, roastery, producer, origin_location, origin_country, process, varietal, roasted_on, cup_flavor_notes ),
+            beans ( * ),
             grinders ( uid, maker, model )
           `
           )
-          .order('brew_date', { ascending: false });
-        if (err) throw new Error(err.message);
-        setRows((data ?? []) as unknown as BrewWithBean[]);
-        if ((data ?? []).length > 0 && !selectedUid) setSelectedUid((data ?? [])[0]?.uid ?? null);
+          .order('brew_date', { ascending: false })
+          .order('created_at', { ascending: false })
+          .order('uid', { ascending: false }));
+        setRows(data.filter(row => beverageTypeOf(row.beans) === 'coffee'));
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load.');
+      setError(getStorageErrorMessage(e, t('common.loadFailed'), t));
     } finally {
       setLoading(false);
     }
@@ -341,16 +354,18 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
 
   async function refreshSavedBeans() {
     if (isGuest) {
-      setSavedBeans(localListBeans() as SavedBeanOption[]);
+      const localData = localGetAllData();
+      validateLocalData(localData, { allowOrphanLabels: true });
+      setSavedBeans(localListBeans().filter(row => beverageTypeOf(row) === 'coffee'));
       return;
     }
     const supabase = getSupabaseClient();
-    const { data, error: beanErr } = await supabase
+    const data = await fetchAllRows<SavedBeanOption>(() => supabase
       .from('beans')
-      .select('uid,bean_name,roastery,producer,origin_location,origin_country,process,varietal,roasted_on,cup_flavor_notes')
-      .order('created_at', { ascending: false });
-    if (beanErr) throw new Error(beanErr.message);
-    setSavedBeans((data ?? []) as SavedBeanOption[]);
+      .select('*')
+      .order('created_at', { ascending: false })
+      .order('uid', { ascending: false }));
+    setSavedBeans(data.filter(row => beverageTypeOf(row) === 'coffee'));
   }
 
   function toAiBeanSummary(bean: BrewWithBean['beans'] | null): AiBeanSummary | null {
@@ -420,6 +435,7 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
   async function requestAiForSelected() {
     if (!selected) return;
     if (!aiEnabled) return;
+    const version = selectionVersion.current;
     setAiError(null);
     setAiGuidance(null);
     setAiCopiedMsg(null);
@@ -428,49 +444,20 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
     try {
       const { payload, signature } = buildAiRequestContext(selected);
       const guidance = await requestBrewGuidance(getAiServerConfig(), payload);
+      if (version !== selectionVersion.current) return;
       setCachedBrewGuidance(selected.uid, signature, guidance);
       setAiGuidance(guidance);
       setAiIsCached(false);
     } catch (e) {
+      if (version !== selectionVersion.current) return;
       setAiError(
         t('history.ai.error', {
           message: e instanceof Error ? e.message : 'Unknown error',
         }),
       );
     } finally {
-      setAiLoading(false);
+      if (version === selectionVersion.current) setAiLoading(false);
     }
-  }
-
-  async function getOrCreateGrinderUid(makerRaw: string, modelRaw: string): Promise<string> {
-    const maker = makerRaw.trim();
-    const model = modelRaw.trim();
-    if (!maker || !model) {
-      throw new Error(t('grindMap.error.missingGrinder'));
-    }
-
-    if (isGuest) {
-      return localGetOrCreateGrinder(maker, model);
-    }
-
-    const supabase = getSupabaseClient();
-    const { data: found, error: foundErr } = await supabase
-      .from('grinders')
-      .select('uid')
-      .ilike('maker', maker)
-      .ilike('model', model)
-      .maybeSingle();
-    if (foundErr) throw new Error(foundErr.message);
-    if (found?.uid) return found.uid as string;
-
-    const uid = crypto.randomUUID();
-    const { error: insertErr } = await supabase.from('grinders').insert({
-      uid,
-      maker,
-      model
-    });
-    if (insertErr) throw new Error(insertErr.message);
-    return uid;
   }
 
   // -----------------------------------------------------------------------
@@ -490,15 +477,17 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
 
     setEditSaving(true);
     try {
-      const grinder_uid =
+      const grinder =
         editDraft.grinder_maker.trim() && editDraft.grinder_model.trim()
-          ? await getOrCreateGrinderUid(editDraft.grinder_maker, editDraft.grinder_model)
+          ? await prepareGrinder(editDraft.grinder_maker, editDraft.grinder_model, isGuest,
+            pendingGrinder.current?.brewUid === selected.uid ? pendingGrinder.current.row : null)
           : null;
+      pendingGrinder.current = grinder ? { brewUid: selected.uid, row: grinder } : null;
 
       const patch = {
         brew_date: brewDateIso,
         bean_uid: editDraft.bean_uid,
-        grinder_uid,
+        grinder_uid: grinder?.uid ?? null,
         grinder_setting: editDraft.grinder_setting.trim() || null,
         recipe: editDraft.recipe.trim() || null,
         coffee_dose_g: toNullableNumber(editDraft.coffee_dose_g),
@@ -513,36 +502,16 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
         taste_flavor_notes: (editDraft.taste_flavor_notes as FlavorNote[]) || []
       };
 
-      if (isGuest) {
-        localUpdateBrew(selected.uid, patch);
-      } else {
-        const supabase = getSupabaseClient();
-        const { error: updErr } = await supabase
-          .from('brews')
-          .update(patch)
-          .eq('uid', selected.uid);
-        if (updErr) throw new Error(updErr.message);
-
-        const { error: delErr } = await supabase.from('brew_flavor_notes').delete().eq('brew_uid', selected.uid);
-        if (delErr) throw new Error(delErr.message);
-        if (editDraft.taste_flavor_notes.length > 0) {
-          const noteRows = editDraft.taste_flavor_notes.map((n) => ({
-            brew_uid: selected.uid,
-            l1: n.path[0] ?? '',
-            l2: n.path[1] ?? null,
-            l3: n.path[2] ?? null,
-            color: n.color
-          }));
-          const { error: insErr } = await supabase.from('brew_flavor_notes').insert(noteRows);
-          if (insErr) throw new Error(insErr.message);
-        }
-      }
+      const data = { grinders: grinder ? [grinder] : [], brews: [{ uid: selected.uid, ...patch }] };
+      if (isGuest) localSaveData(data);
+      else await saveCloudData(data);
+      pendingGrinder.current = null;
 
       await Promise.all([refresh(), refreshSavedBeans()]);
       setIsEditing(false);
       setEditDraft(null);
     } catch (e) {
-      setEditError(e instanceof Error ? e.message : t('newBrew.error.saveFailed'));
+      setEditError(getStorageErrorMessage(e, t('newBrew.error.saveFailed'), t));
     } finally {
       setEditSaving(false);
     }
@@ -554,6 +523,7 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
 
   async function shareSelectedBrew() {
     if (!selected || isGuest) return;
+    const version = selectionVersion.current;
     setShareMsg(null);
     setShareBusy(true);
     try {
@@ -563,6 +533,7 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
         .select('share_token,revoked_at')
         .eq('brew_uid', selected.uid)
         .maybeSingle();
+      if (version !== selectionVersion.current) return;
       if (existingErr) throw new Error(existingErr.message);
 
       const current = existing as { share_token: string | null; revoked_at: string | null } | null;
@@ -579,6 +550,7 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
             },
             { onConflict: 'brew_uid' }
           );
+        if (version !== selectionVersion.current) return;
         if (upsertErr) throw new Error(upsertErr.message);
       }
 
@@ -587,14 +559,14 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
 
       try {
         await navigator.clipboard.writeText(url);
-        setShareMsg(t('history.share.copied'));
+        if (version === selectionVersion.current) setShareMsg(t('history.share.copied'));
       } catch {
-        setShareMsg(t('history.share.created'));
+        if (version === selectionVersion.current) setShareMsg(t('history.share.created'));
       }
     } catch (e) {
-      setShareMsg(e instanceof Error ? e.message : t('history.share.failed'));
+      if (version === selectionVersion.current) setShareMsg(e instanceof Error ? e.message : t('history.share.failed'));
     } finally {
-      setShareBusy(false);
+      if (version === selectionVersion.current) setShareBusy(false);
     }
   }
 
@@ -751,7 +723,7 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
       setSelectedUid(null);
       await refresh();
     } catch (e) {
-      setError(e instanceof Error ? e.message : t('history.delete.failed'));
+      setError(getStorageErrorMessage(e, t('history.delete.failed'), t));
     } finally {
       setDeleteBusy(false);
     }
@@ -763,23 +735,28 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
 
   useEffect(() => {
     void Promise.all([refresh(), refreshSavedBeans()]).catch((e) => {
-      setError(e instanceof Error ? e.message : t('common.loadFailed'));
+      setError(getStorageErrorMessage(e, t('common.loadFailed'), t));
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user.uid, isGuest]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    selectionVersion.current += 1;
+    pendingGrinder.current = null;
+    setSelectedUid(selected?.uid ?? null);
     setIsEditing(false);
     setEditDraft(null);
     setEditError(null);
     setShareMsg(null);
+    setShareBusy(false);
     setShareUrl(null);
     setSavePngMsg(null);
     setAiError(null);
+    setAiLoading(false);
     setAiGuidance(null);
     setAiCopiedMsg(null);
     setAiIsCached(false);
-  }, [selectedUid]);
+    return () => { selectionVersion.current += 1; };
+  }, [selected?.uid, user.uid, isGuest]);
 
   useEffect(() => {
     if (!selected || !aiEnabled) {
@@ -815,7 +792,7 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
             type="button"
             className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border bg-white text-sm hover:bg-gray-50 disabled:bg-gray-100 whitespace-nowrap"
             onClick={() => void exportBrewHistoryJson()}
-            disabled={sortedRows.length === 0}
+            disabled={loading || Boolean(error) || sortedRows.length === 0}
           >
             <ClipboardCopy className="w-4 h-4" aria-hidden="true" />
             {t('history.exportJson')}
@@ -957,7 +934,7 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
                   r.beans?.origin_location ||
                   r.beans?.origin_country ||
                   t('history.bean.fallbackLabel');
-                const active = r.uid === selectedUid;
+                const active = r.uid === selected?.uid;
                 return (
                   <button
                     key={r.uid}

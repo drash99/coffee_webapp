@@ -44,8 +44,10 @@ import {
   setLabelPrinterName,
 } from '../labels/prefs';
 import { canPrintBrotherLabels, getPlatform, printBrotherLabels } from '../../platform';
-import { renderBeanLabelDataUrl } from '../utils/beanLabelImage';
+import { BEAN_LABEL_DIMENSIONS, BeanLabelLayoutError, renderBeanLabelDataUrl } from '../utils/beanLabelImage';
 import { toQrDataUrl } from '../utils/qr';
+import { getStorageErrorMessage } from '../utils/storageError';
+import { validateLocalData } from '../storage/localDataValidation';
 
 type AuthTab = 'login' | 'signup';
 
@@ -91,28 +93,57 @@ export function SettingsPage({
   const [labelMsg, setLabelMsg] = useState<{ tone: 'error' | 'success'; text: string } | null>(null);
   const [testPrintBusy, setTestPrintBusy] = useState(false);
   const [backupMsg, setBackupMsg] = useState<string | null>(null);
+  const [logoutBusy, setLogoutBusy] = useState(false);
+  const [logoutError, setLogoutError] = useState<string | null>(null);
+  const logoutPending = useRef(false);
   const restoreInputRef = useRef<HTMLInputElement | null>(null);
-  const localData = localGetAllData();
-  const canManageGuestBackup = isGuest || !user;
+  let localData: ReturnType<typeof localGetAllData> | null = null;
+  let localDataError: string | null = null;
+  try {
+    const data = localGetAllData();
+    validateLocalData(data, { allowOrphanLabels: true });
+    localData = data;
+  } catch (e) {
+    localDataError = getStorageErrorMessage(e, t('common.loadFailed'), t);
+  }
+  const hasLocalData = localData !== null && Object.values(localData).some((rows) => rows.length > 0);
+  const canManageGuestBackup = isGuest || !user || localDataError !== null;
   const supportsNativeLabelPrint = canPrintBrotherLabels();
 
+  async function handleLogout() {
+    if (logoutPending.current) return;
+    logoutPending.current = true;
+    setLogoutBusy(true);
+    setLogoutError(null);
+    try {
+      await logout();
+      onLogout();
+    } catch {
+      setLogoutError(t('settings.logout.failed'));
+    } finally {
+      logoutPending.current = false;
+      setLogoutBusy(false);
+    }
+  }
+
   async function handleMigrateData() {
-    if (!localHasData()) return;
-    const allData = localGetAllData();
-    const msg = t('guest.migrate.confirm', {
-      beans: allData.beans.length,
-      brews: allData.brews.length,
-    });
-    if (!window.confirm(msg)) return;
+    if (!localData) return;
     setMigrating(true);
     setMigrateMsg(null);
     try {
+      if (!localHasData()) return;
+      const allData = localGetAllData();
+      const msg = t('guest.migrate.confirm', {
+        beans: allData.beans.length,
+        brews: allData.brews.length,
+      });
+      if (!window.confirm(msg)) return;
       await migrateLocalToSupabase();
       setMigrateMsg(t('guest.migrate.done'));
     } catch (e) {
       setMigrateMsg(
         t('guest.migrate.failed', {
-          message: e instanceof Error ? e.message : 'Unknown error',
+          message: getStorageErrorMessage(e, t('common.loadFailed'), t),
         })
       );
     } finally {
@@ -248,9 +279,7 @@ export function SettingsPage({
       const printDataUrl = await renderBeanLabelDataUrl({
         roasteryText: t('app.title'),
         beanName: t('settings.labels.testPrint'),
-        originText: printerName,
-        producerProcessText: null,
-        varietalText: null,
+        details: [{ label: t('beanLabels.field.printerName'), value: printerName }],
         footerText: t('settings.labels.testFooter'),
         qrDataUrl,
         qrText: publicBaseUrl,
@@ -263,7 +292,9 @@ export function SettingsPage({
     } catch (e) {
       setLabelMsg({
         tone: 'error',
-        text: e instanceof Error ? e.message : t('settings.labels.testPrintUnavailable'),
+        text: e instanceof BeanLabelLayoutError
+          ? t('beanLabels.error.tooLong', { length: String(BEAN_LABEL_DIMENSIONS.maxLengthMm) })
+          : e instanceof Error ? e.message : t('settings.labels.testPrintUnavailable'),
       });
     } finally {
       setTestPrintBusy(false);
@@ -271,20 +302,25 @@ export function SettingsPage({
   }
 
   function handleExportBackup() {
-    if (!localHasData()) {
-      setBackupMsg(t('settings.backup.empty'));
-      return;
-    }
+    if (!localData) return;
+    try {
+      if (!localHasData()) {
+        setBackupMsg(t('settings.backup.empty'));
+        return;
+      }
 
-    const payload = localBuildBackupPayload();
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `beanlog-backup-${new Date().toISOString().slice(0, 10)}.json`;
-    link.click();
-    URL.revokeObjectURL(url);
-    setBackupMsg(t('settings.backup.saved'));
+      const payload = localBuildBackupPayload();
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `beanlog-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      link.click();
+      URL.revokeObjectURL(url);
+      setBackupMsg(t('settings.backup.saved'));
+    } catch (e) {
+      setBackupMsg(getStorageErrorMessage(e, t('common.loadFailed'), t));
+    }
   }
 
   async function handleRestoreBackupFile(file: File | null) {
@@ -308,7 +344,7 @@ export function SettingsPage({
         }),
       );
     } catch (e) {
-      setBackupMsg(e instanceof Error ? e.message : t('settings.backup.invalid'));
+      setBackupMsg(getStorageErrorMessage(e, t('settings.backup.invalid'), t));
     } finally {
       if (restoreInputRef.current) {
         restoreInputRef.current.value = '';
@@ -327,6 +363,9 @@ export function SettingsPage({
 
   return (
     <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+      {localDataError && (
+        <p role="alert" className="p-4 text-sm text-red-700 bg-red-50 border-b border-red-100">{localDataError}</p>
+      )}
       {/* About */}
       <section className="p-4 border-b border-gray-100">
         <h2 className="text-sm font-semibold text-gray-700 mb-2">{t('settings.about.title')}</h2>
@@ -620,19 +659,19 @@ export function SettingsPage({
         <section className="p-4 border-b border-gray-100 space-y-3">
           <h2 className="text-sm font-semibold text-gray-700 mb-1">{t('settings.backup.title')}</h2>
           <p className="text-xs text-gray-500">{t('settings.backup.description')}</p>
-          <p className="text-[11px] text-gray-500">
+          {localData && <p className="text-[11px] text-gray-500">
             {t('settings.backup.summary', {
               beans: localData.beans.length,
               brews: localData.brews.length,
               labels: localData.beanLabels.length,
             })}
-          </p>
+          </p>}
           <div className="flex items-center gap-2 flex-wrap">
             <button
               type="button"
               className="px-3 py-1.5 rounded-lg bg-amber-700 text-white text-xs hover:bg-amber-800 whitespace-nowrap disabled:bg-gray-300"
               onClick={handleExportBackup}
-              disabled={!localHasData()}
+              disabled={!hasLocalData || localDataError !== null}
             >
               {t('settings.backup.export')}
             </button>
@@ -664,12 +703,12 @@ export function SettingsPage({
             <p className="text-sm text-gray-600">
               {t('logging.loggedInAs')} <span className="font-medium text-gray-900">{user.id}</span>
             </p>
-            {localHasData() && (
+            {(hasLocalData || localDataError !== null) && (
               <button
                 type="button"
                 className="w-full px-3 py-2 rounded-lg bg-amber-700 text-white text-sm hover:bg-amber-800 disabled:bg-gray-300 whitespace-nowrap"
                 onClick={handleMigrateData}
-                disabled={migrating}
+                disabled={migrating || localDataError !== null}
               >
                 {migrating ? t('guest.migrate.migrating') : t('guest.migrate.button')}
               </button>
@@ -679,16 +718,14 @@ export function SettingsPage({
             )}
             <button
               type="button"
-              className="w-full px-3 py-2 rounded-lg border bg-white text-sm hover:bg-gray-50"
-              onClick={async () => {
-                try {
-                  await logout();
-                } catch {}
-                onLogout();
-              }}
+              className="w-full px-3 py-2 rounded-lg border bg-white text-sm hover:bg-gray-50 disabled:bg-gray-100"
+              onClick={() => void handleLogout()}
+              disabled={logoutBusy}
+              aria-busy={logoutBusy}
             >
-              {t('logging.logout')}
+              {logoutBusy ? t('settings.logout.busy') : t('logging.logout')}
             </button>
+            {logoutError && <p role="alert" className="text-sm text-red-700">{logoutError}</p>}
           </div>
         )}
 

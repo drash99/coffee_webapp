@@ -94,8 +94,8 @@ as $$
     s.created_at as shared_at
   from public.brew_shares s
   join public.brews br on br.uid = s.brew_uid
-  left join public.beans b on b.uid = br.bean_uid
-  left join public.grinders g on g.uid = br.grinder_uid
+  join public.beans b on b.uid = br.bean_uid and b.user_uid = br.user_uid
+  left join public.grinders g on g.uid = br.grinder_uid and g.user_uid = br.user_uid
   where s.share_token = p_share_token
     and s.revoked_at is null
   limit 1;

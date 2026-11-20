@@ -1,8 +1,12 @@
 import { useEffect, useState } from 'react';
 import { isSupabaseConfigured, getSupabaseClient } from '../../config/supabase';
 import { unique } from '../utils/formatting';
+import { fetchAllRows } from '../utils/pagination';
+import type { BeverageType } from '../types';
+import { beverageTypeOf } from '../utils/beverage';
 
 interface BeanRecord {
+  beverage_type?: BeverageType;
   roastery: string;
   origin_country: string;
   origin_location: string;
@@ -19,11 +23,13 @@ interface BeanRecord {
  *   - producersForLocation(country, location): producers filtered by country + location
  *   - varietals: all unique varietals
  */
-export function useBeanSuggestions(userUid: string | undefined) {
+export function useBeanSuggestions(userUid: string | undefined, refreshKey = 0) {
   const [beans, setBeans] = useState<BeanRecord[]>([]);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
+    setBeans([]);
+    setLoading(false);
     if (!userUid || !isSupabaseConfigured()) return;
 
     let cancelled = false;
@@ -32,18 +38,14 @@ export function useBeanSuggestions(userUid: string | undefined) {
     (async () => {
       try {
         const supabase = getSupabaseClient();
-        const { data, error } = await supabase
+        const data = await fetchAllRows<Partial<BeanRecord>>(() => supabase
           .from('beans')
-          .select('roastery, origin_country, origin_location, producer, varietal')
-          .order('created_at', { ascending: false });
-
-        if (error) {
-          console.error('[useBeanSuggestions]', error.message);
-          return;
-        }
+          .select('*')
+          .order('created_at', { ascending: false })
+          .order('uid', { ascending: false }));
         if (cancelled) return;
 
-        const records: BeanRecord[] = (data ?? []).map((row: any) => ({
+        const records: BeanRecord[] = data.filter(row => beverageTypeOf(row) === 'coffee').map((row) => ({
           roastery: (row.roastery ?? '').trim(),
           origin_country: (row.origin_country ?? '').trim(),
           origin_location: (row.origin_location ?? '').trim(),
@@ -60,7 +62,7 @@ export function useBeanSuggestions(userUid: string | undefined) {
     })();
 
     return () => { cancelled = true; };
-  }, [userUid]);
+  }, [userUid, refreshKey]);
 
   // --- Independent fields ---
 

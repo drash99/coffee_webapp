@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { isSupabaseConfigured, getSupabaseClient } from '../../config/supabase';
+import { fetchAllRows } from '../utils/pagination';
 
 export interface GrinderSuggestion {
   maker: string;
@@ -13,11 +14,13 @@ export interface GrinderSuggestion {
  *   - modelsForMaker(maker): models that belong to the given maker (case-insensitive match)
  *   - allGrinders: raw list for custom filtering
  */
-export function useGrinderSuggestions(userUid: string | undefined) {
+export function useGrinderSuggestions(userUid: string | undefined, refreshKey = 0) {
   const [grinders, setGrinders] = useState<GrinderSuggestion[]>([]);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
+    setGrinders([]);
+    setLoading(false);
     if (!userUid || !isSupabaseConfigured()) return;
 
     let cancelled = false;
@@ -26,15 +29,11 @@ export function useGrinderSuggestions(userUid: string | undefined) {
     (async () => {
       try {
         const supabase = getSupabaseClient();
-        const { data, error } = await supabase
+        const data = await fetchAllRows<Partial<GrinderSuggestion>>(() => supabase
           .from('grinders')
           .select('maker, model')
-          .order('created_at', { ascending: false });
-
-        if (error) {
-          console.error('[useGrinderSuggestions]', error.message);
-          return;
-        }
+          .order('created_at', { ascending: false })
+          .order('uid', { ascending: false }));
         if (cancelled) return;
 
         // Deduplicate (case-insensitive) and keep the first (most recent) casing
@@ -57,7 +56,7 @@ export function useGrinderSuggestions(userUid: string | undefined) {
     })();
 
     return () => { cancelled = true; };
-  }, [userUid]);
+  }, [userUid, refreshKey]);
 
   // Unique makers (sorted alphabetically, case-insensitive)
   const makers: string[] = Array.from(

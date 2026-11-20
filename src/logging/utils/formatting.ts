@@ -16,8 +16,14 @@ export function toNullableNumber(input: string): number | null {
 /** Format an ISO date string for display using the browser locale. Returns '' for null/undefined. */
 export function fmtDate(iso: string | null | undefined): string {
   if (!iso) return '';
-  const d = new Date(iso);
+  const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  const d = new Date(dateOnly ? `${iso}T00:00:00` : iso);
   if (Number.isNaN(d.getTime())) return iso;
+  if (dateOnly && (
+    d.getFullYear() !== Number(dateOnly[1]) ||
+    d.getMonth() + 1 !== Number(dateOnly[2]) ||
+    d.getDate() !== Number(dateOnly[3])
+  )) return iso;
   return d.toLocaleDateString();
 }
 
@@ -60,4 +66,3 @@ export function unique(values: string[]): string[] {
     a.localeCompare(b, undefined, { sensitivity: 'base' })
   );
 }
-

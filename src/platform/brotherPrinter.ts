@@ -5,8 +5,23 @@ export type BrotherPrintLabel = {
   pngDataUrl: string;
 };
 
+export type BrotherPrinterState = 'ready' | 'noPaper' | 'coverOpen' | 'busy' | 'paperJam' |
+  'highVoltageAdapter' | 'batteryEmpty' | 'batteryTrouble' | 'tubeNotDetected' | 'motorSlow' |
+  'unsupportedCharger' | 'incompatibleEquipment' | 'systemError' | 'otherError';
+
+export type BrotherPrinterStatus = {
+  connection: 'connected' | 'notFound' | 'unreachable';
+  printerName: string;
+  checkedAt: number;
+  transport?: string;
+  state?: BrotherPrinterState;
+  battery?: { level?: number; maxLevel?: number; charging?: boolean; mounted?: boolean };
+  media?: { widthMm?: number };
+};
+
 type BrotherPrinterPlugin = {
   printLabels(options: { printerName?: string; labels: BrotherPrintLabel[] }): Promise<{ printed: number }>;
+  getStatus(options: { printerName?: string }): Promise<BrotherPrinterStatus>;
 };
 
 const BrotherPrinter = registerPlugin<BrotherPrinterPlugin>('BrotherPrinter');
@@ -64,6 +79,21 @@ export async function printBrotherLabels(options: {
       'BrotherPrinterPlugin',
       'printLabels',
       normalizedOptions,
+    );
+  } catch (error) {
+    throw new Error(extractPluginErrorMessage(error));
+  }
+}
+
+export async function getBrotherPrinterStatus(options: { printerName?: string }): Promise<BrotherPrinterStatus> {
+  if (!canPrintBrotherLabels()) throw new Error('Brother printer status is only available on iOS.');
+  const normalizedOptions = { printerName: options.printerName?.trim() || undefined };
+  try {
+    if (hasBrotherPrinterHeader()) return await BrotherPrinter.getStatus(normalizedOptions);
+    const bridge = Capacitor as CapacitorBridgeLike;
+    if (!bridge.nativePromise) throw new Error('Brother printer status is unavailable in this iOS build.');
+    return await bridge.nativePromise<typeof normalizedOptions, BrotherPrinterStatus>(
+      'BrotherPrinterPlugin', 'getStatus', normalizedOptions,
     );
   } catch (error) {
     throw new Error(extractPluginErrorMessage(error));

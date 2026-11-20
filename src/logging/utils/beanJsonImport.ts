@@ -1,5 +1,8 @@
-import { getTopLevelColor, SCA_FLAVOR_WHEEL } from '../scaFlavorWheel';
-import type { BeanInput, FlavorNote } from '../types';
+import { beverageFlavorWheels } from '../beverageFlavorWheels';
+import type { FlavorWheelNode } from '../scaFlavorWheel';
+import type { BeanInput, BeanRow, BeverageDetails, BeverageType, FlavorNote } from '../types';
+import { beverageTypeOf, type NonCoffeeBeverage } from './beverage';
+import { beverageItemFields, detailKey } from './beverageFields';
 import { unique } from './formatting';
 
 export type BeanImportSavedBean = {
@@ -51,7 +54,11 @@ const EMPTY_BEAN_IMPORT: BeanInput = {
   roasted_on: '',
 };
 
-const ALL_FLAVOR_PATHS = flattenFlavorPaths();
+const flavorPaths = {
+  coffee: flattenFlavorPaths(beverageFlavorWheels.coffee),
+  tea: flattenFlavorPaths(beverageFlavorWheels.tea),
+  wine: flattenFlavorPaths(beverageFlavorWheels.wine),
+};
 
 function toCleanString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -85,20 +92,11 @@ function normalizeDate(value: unknown): string {
   return date.toISOString().slice(0, 10) === raw ? raw : '';
 }
 
-function flattenFlavorPaths(): string[][] {
-  const paths: string[][] = [];
-
-  for (const top of SCA_FLAVOR_WHEEL) {
-    paths.push([top.name]);
-    for (const mid of top.children ?? []) {
-      paths.push([top.name, mid.name]);
-      for (const leaf of mid.children ?? []) {
-        paths.push([top.name, mid.name, leaf.name]);
-      }
-    }
-  }
-
-  return paths;
+function flattenFlavorPaths(nodes: FlavorWheelNode[], prefix: string[] = []): string[][] {
+  return nodes.flatMap(node => {
+    const path = [...prefix, node.name];
+    return [path, ...flattenFlavorPaths(node.children ?? [], path)];
+  });
 }
 
 function samePath(a: string[], b: string[]): boolean {
@@ -111,7 +109,7 @@ function hasSuffix(path: string[], suffix: string[]): boolean {
   return suffix.every((part, index) => part.toLowerCase() === path[index + offset].toLowerCase());
 }
 
-function normalizeFlavorPath(rawPath: unknown): string[] | null {
+function normalizeFlavorPath(rawPath: unknown, paths: string[][]): string[] | null {
   const parts = Array.isArray(rawPath)
     ? rawPath.map(toCleanString).filter(Boolean).slice(0, 3)
     : toCleanString(rawPath)
@@ -122,21 +120,21 @@ function normalizeFlavorPath(rawPath: unknown): string[] | null {
 
   if (parts.length === 0) return null;
 
-  const exact = ALL_FLAVOR_PATHS.find((path) => samePath(path, parts));
+  const exact = paths.find((path) => samePath(path, parts));
   if (exact) return exact;
 
-  const suffixMatches = ALL_FLAVOR_PATHS.filter((path) => hasSuffix(path, parts));
+  const suffixMatches = paths.filter((path) => hasSuffix(path, parts));
   return suffixMatches.length === 1 ? suffixMatches[0] : null;
 }
 
-function normalizeFlavorNotes(value: unknown): FlavorNote[] {
+function normalizeFlavorNotes(value: unknown, category: BeverageType): FlavorNote[] {
   if (!Array.isArray(value)) return [];
 
   const notes: FlavorNote[] = [];
   const seen = new Set<string>();
 
   for (const item of value) {
-    const path = isRecord(item) ? normalizeFlavorPath(item.path ?? [item.l1, item.l2, item.l3]) : normalizeFlavorPath(item);
+    const path = normalizeFlavorPath(isRecord(item) ? item.path ?? [item.l1, item.l2, item.l3] : item, flavorPaths[category]);
     if (!path) continue;
 
     const key = path.join('>');
@@ -145,7 +143,7 @@ function normalizeFlavorNotes(value: unknown): FlavorNote[] {
     seen.add(key);
     notes.push({
       path,
-      color: getTopLevelColor(path[0] ?? ''),
+      color: beverageFlavorWheels[category].find(node => node.name === path[0])?.color ?? '#888888',
     });
 
     if (notes.length >= MAX_FLAVOR_NOTES) break;
@@ -213,7 +211,7 @@ export function buildBeanImportPrompt(savedBeans: BeanImportSavedBean[]): string
       varietals: limitedUnique(savedBeans.map((bean) => bean.varietal)),
     },
     existing_beans: savedBeans.slice(0, MAX_REFERENCE_BEANS).map(compactBeanReference),
-    allowed_sca_flavor_wheel: SCA_FLAVOR_WHEEL,
+    allowed_sca_flavor_wheel: beverageFlavorWheels.coffee,
   };
 
   return [
@@ -240,11 +238,19 @@ export function buildBeanImportPrompt(savedBeans: BeanImportSavedBean[]): string
 
 export function parseBeanImportJson(raw: string): BeanInput {
   const record = getBeanRecord(parseJsonCandidate(raw));
+  if (record.beverage_type != null && record.beverage_type !== 'coffee') throw new Error('Invalid coffee JSON');
 
   return {
     ...EMPTY_BEAN_IMPORT,
-    bean_name: toCleanString(record.bean_name),
     roastery: toCleanString(record.roastery),
+    ...commonFields(record, 'coffee'),
+    roasted_on: normalizeDate(record.roasted_on),
+  };
+}
+
+function commonFields(record: JsonRecord, category: BeverageType) {
+  return {
+    bean_name: toCleanString(record.bean_name),
     producer: toCleanString(record.producer),
     origin_location: toCleanString(record.origin_location),
     origin_country: toCleanString(record.origin_country),
@@ -253,7 +259,68 @@ export function parseBeanImportJson(raw: string): BeanInput {
     cup_notes: Array.isArray(record.cup_notes)
       ? record.cup_notes.map(toCleanString).filter(Boolean).join(', ')
       : toCleanString(record.cup_notes),
-    cup_flavor_notes: normalizeFlavorNotes(record.cup_flavor_notes),
-    roasted_on: normalizeDate(record.roasted_on),
+    cup_flavor_notes: normalizeFlavorNotes(record.cup_flavor_notes, category),
   };
+}
+
+export function buildBeverageImportPrompt(category: NonCoffeeBeverage, savedItems: BeanRow[]): string {
+  const items = savedItems.filter(row => beverageTypeOf(row) === category);
+  const fields = beverageItemFields[category];
+  const wheel = beverageFlavorWheels[category];
+  const example = wheel[0];
+  const textKeys = ['bean_name', 'producer', 'origin_country', 'origin_location', 'varietal'] as const;
+  const referenceKeys = category === 'tea' ? [...textKeys, 'process' as const] : textKeys;
+  const references = {
+    existing_lists: Object.fromEntries(referenceKeys.map(key => [key, limitedUnique(items.map(item => item[key]))])),
+    existing_products: items.slice(0, MAX_REFERENCE_BEANS).map(item =>
+      Object.fromEntries(referenceKeys.map(key => [key, item[key] ?? '']))),
+    allowed_detail_options: Object.fromEntries(fields.flatMap(field => field.options ? [[detailKey(field), field.options]] : [])),
+    allowed_flavor_wheel: wheel,
+  };
+  const format = {
+    beverage_type: category,
+    ...Object.fromEntries(referenceKeys.map(key => [key, ''])),
+    beverage_details: Object.fromEntries(fields.map(field => [detailKey(field), field.numeric ? null : ''])),
+    cup_notes: '',
+    cup_flavor_notes: [{ path: [example.name, example.children![0].name], color: example.color }],
+  };
+
+  return [
+    `Extract one ${category} product from the attached photo of its packaging or label. Return one JSON object only, with exactly the fields shown and beverage_type set to "${category}".`,
+    '- Put the product name printed on the label in bean_name, and the brand, producer, or estate in producer. Use origin_location for the named region or appellation, not a bottler address.',
+    '- If a detected value refers to the same product, producer, origin, variety, or process in the existing lists, copy that spelling and casing. Otherwise use the new value as written on the label. Do not match on similarity alone.',
+    '- Extract only information visible in the photo. Leave unknown text empty, unknown numbers null, and cup_flavor_notes as [] when no notes are visible. If the product name is unreadable, leave it empty.',
+    category === 'tea'
+      ? '- varietal is the tea cultivar, process is the processing method, teaStyle must be an allowed value, and harvest is text as printed (e.g. Spring 2026 or First Flush).'
+      : '- varietal is the grape variety or varieties. wineStyle must be an allowed value. Vintage is a 4-digit harvest year; use null for non-vintage or unclear. abv is the printed alcohol percentage as a number without the percent sign.',
+    `- cup_notes contains tasting descriptors printed on the label. Map at most ${MAX_FLAVOR_NOTES} of them to paths from allowed_flavor_wheel, using the top-level color. Omit unmappable structured notes; do not invent flavors or copy the example.`,
+    '',
+    'Required JSON format:',
+    JSON.stringify(format, null, 2),
+    '',
+    'Existing BeanLog reference data:',
+    JSON.stringify(references, null, 2),
+  ].join('\n');
+}
+
+export function parseBeverageImportJson(raw: string, category: NonCoffeeBeverage) {
+  const record = getBeanRecord(parseJsonCandidate(raw));
+  if (record.beverage_type !== category || !toCleanString(record.bean_name)) throw new Error('Invalid beverage JSON');
+  const details: BeverageDetails = {};
+  const source = isRecord(record.beverage_details) ? record.beverage_details : {};
+  for (const field of beverageItemFields[category]) {
+    const key = detailKey(field);
+    const rawValue = source[key];
+    const value = toCleanString(rawValue);
+    if (field.options) {
+      const option = field.options.find(candidate => candidate.toLowerCase() === value.toLowerCase());
+      if (option) details[key] = option;
+    } else if (field.numeric) {
+      const [min, max, step] = field.numeric;
+      const number = typeof rawValue === 'number' ? rawValue : /^\d+(\.\d+)?$/.test(value) ? Number(value) : NaN;
+      if (Number.isFinite(number) && number >= min && number <= max && (step !== 1 || Number.isInteger(number))) details[key] = number;
+    } else if (value) details[key] = value;
+  }
+  const common = commonFields(record, category);
+  return { ...common, process: category === 'tea' ? common.process : '', beverage_details: details };
 }

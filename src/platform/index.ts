@@ -13,6 +13,6 @@ export type { Platform } from './platform';
 export { pickImageNative, hasNativeCamera } from './camera';
 export { hapticTap, hapticImpact } from './haptics';
 export { addAppUrlOpenListener, getLaunchAppUrl } from './appLinks';
-export { canPrintBrotherLabels, printBrotherLabels } from './brotherPrinter';
+export { canPrintBrotherLabels, printBrotherLabels, getBrotherPrinterStatus } from './brotherPrinter';
 export { platformRequestJson } from './http';
-export type { BrotherPrintLabel } from './brotherPrinter';
+export type { BrotherPrintLabel, BrotherPrinterStatus, BrotherPrinterState } from './brotherPrinter';

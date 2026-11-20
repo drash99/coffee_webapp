@@ -5,6 +5,33 @@
 --   that exist in auth.users(id). If not, backfill/remap first.
 -- - App now authenticates via supabase.auth and not public.app_users.
 
+-- Retain legacy credentials for administrator-led migration, but never expose them.
+do $legacy$
+declare
+  columns_sql text;
+begin
+  if to_regclass('public.app_users') is not null then
+    alter table public.app_users enable row level security;
+    alter table public.app_users force row level security;
+    revoke all privileges on table public.app_users from public, anon, authenticated;
+    -- Column ACLs survive a table-level REVOKE.
+    select string_agg(quote_ident(attname), ', ' order by attnum)
+      into columns_sql
+      from pg_attribute
+      where attrelid = 'public.app_users'::regclass and attnum > 0 and not attisdropped;
+    if columns_sql is not null then
+      execute format(
+        'revoke all privileges (%s) on table public.app_users from public, anon, authenticated',
+        columns_sql
+      );
+    end if;
+    drop policy if exists app_users_no_client_access on public.app_users;
+    create policy app_users_no_client_access on public.app_users
+      as restrictive for all to public using (false) with check (false);
+  end if;
+end;
+$legacy$;
+
 alter table if exists public.beans drop constraint if exists beans_user_uid_fkey;
 alter table if exists public.grinders drop constraint if exists grinders_user_uid_fkey;
 alter table if exists public.brews drop constraint if exists brews_user_uid_fkey;
