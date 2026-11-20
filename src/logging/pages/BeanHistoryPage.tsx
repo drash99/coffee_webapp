@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { ClipboardCopy, Printer } from 'lucide-react';
+import { ClipboardCopy, Plus, Printer } from 'lucide-react';
 import type { AppUser } from '../../auth/types';
 import { getSupabaseClient } from '../../config/supabase';
 import { useI18n } from '../../i18n/I18nProvider';
@@ -8,7 +8,11 @@ import { FlavorWheelPicker } from '../components/FlavorWheelPicker';
 import { NoteDotsList } from '../components/NoteDotsList';
 import { BrotherPrinterStatusPanel } from '../components/BrotherPrinterStatusPanel';
 import { BeverageTypeSelect } from '../components/BeverageTypeSelect';
+import { BeverageDetailValues, BeverageItemFields, DetailValue } from '../components/BeverageFields';
+import { PhotoImportPanel } from '../components/PhotoImportPanel';
 import { beverageTypeOf } from '../utils/beverage';
+import { buildBeverageImportPrompt, parseBeverageImportJson } from '../utils/beanJsonImport';
+import { beverageItemFields, parseBeverageDetails, productDraft, productFields, textDetails, type ProductDraft } from '../utils/beverageFields';
 import { useBeanSuggestions } from '../hooks/useBeanSuggestions';
 import { fmtDate } from '../utils/formatting';
 import { fetchAllRows } from '../utils/pagination';
@@ -17,7 +21,7 @@ import { getStorageErrorMessage } from '../utils/storageError';
 import { validateLocalData } from '../storage/localDataValidation';
 import { beanDisplayLabel } from '../utils/beanLabel';
 import { BEAN_LABEL_DIMENSIONS, BeanLabelLayoutError, renderBeanLabelImages } from '../utils/beanLabelImage';
-import type { BeanInput, BeanRow, FlavorNote } from '../types';
+import type { BeanRow, BeverageType } from '../types';
 import {
   localListBeans,
   localGetAllData,
@@ -83,6 +87,7 @@ function groupLabelHistory(rows: StoredLabelRow[]): LabelHistoryBatch[] {
 type Props = {
   user: AppUser;
   isGuest?: boolean;
+  category?: BeverageType;
 };
 
 type BeanListRow = Pick<
@@ -103,24 +108,9 @@ type BeanListRow = Pick<
   | 'beverage_details'
 >;
 
-function draftFromBean(bean: BeanListRow): BeanInput {
-  return {
-    beverage_type: beverageTypeOf(bean),
-    bean_name: bean.bean_name ?? '',
-    roastery: bean.roastery ?? '',
-    producer: bean.producer ?? '',
-    origin_location: bean.origin_location ?? '',
-    origin_country: bean.origin_country ?? '',
-    process: bean.process ?? '',
-    varietal: bean.varietal ?? '',
-    cup_notes: bean.cup_notes ?? '',
-    cup_flavor_notes: (bean.cup_flavor_notes ?? []) as FlavorNote[],
-    roasted_on: bean.roasted_on ?? ''
-  };
-}
-
-export function BeanHistoryPage({ user, isGuest = false }: Props) {
+export function BeanHistoryPage({ user, isGuest = false, category = 'coffee' }: Props) {
   const { t } = useI18n();
+  const isCoffee = category === 'coffee';
   const [rows, setRows] = useState<BeanListRow[]>([]);
   const [selectedUid, setSelectedUid] = useState<string | null>(null);
   const [mode, setMode] = useState<'manage' | 'print'>('manage');
@@ -129,15 +119,19 @@ export function BeanHistoryPage({ user, isGuest = false }: Props) {
   const [isEditing, setIsEditing] = useState(false);
   const [editSaving, setEditSaving] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
-  const [editDraft, setEditDraft] = useState<BeanInput | null>(null);
+  const [editDraft, setEditDraft] = useState<ProductDraft | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [saveMsg, setSaveMsg] = useState<string | null>(null);
+  const draftUid = useRef<string | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [exportMsg, setExportMsg] = useState<string | null>(null);
 
-  const hookBeanSugg = useBeanSuggestions(isGuest ? undefined : user.uid);
+  const hookBeanSugg = useBeanSuggestions(isGuest || !isCoffee ? undefined : user.uid);
+  const importPrompt = useMemo(() => category === 'coffee' ? '' : buildBeverageImportPrompt(category, rows), [category, rows]);
 
   // Guest mode: derive suggestions from loaded rows
   const guestSugg = useMemo(() => {
-    if (!isGuest) return null;
+    if (!isGuest || !isCoffee) return null;
     const unique = (arr: string[]) => Array.from(new Set(arr.filter(Boolean).map(s => s.trim()))).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
     return {
       roasteries: unique(rows.map(b => b.roastery ?? '')),
@@ -157,7 +151,7 @@ export function BeanHistoryPage({ user, isGuest = false }: Props) {
         return unique(filtered.map(b => b.producer ?? ''));
       },
     };
-  }, [isGuest, rows]);
+  }, [isGuest, isCoffee, rows]);
 
   const roasteries = isGuest ? (guestSugg?.roasteries ?? []) : hookBeanSugg.roasteries;
   const countries = isGuest ? (guestSugg?.countries ?? []) : hookBeanSugg.countries;
@@ -181,17 +175,17 @@ export function BeanHistoryPage({ user, isGuest = false }: Props) {
     try {
       if (isGuest) {
         validateLocalData(localGetAllData(), { allowOrphanLabels: true });
-        const next = localListBeans().filter(row => beverageTypeOf(row) === 'coffee');
+        const next = localListBeans().filter(row => beverageTypeOf(row) === category);
         setRows(next);
         if (next.length > 0 && !selectedUid) setSelectedUid(next[0].uid);
         if (next.length === 0) setSelectedUid(null);
       } else {
         const supabase = getSupabaseClient();
-        const next = await fetchAllRows<BeanListRow>(() => supabase
-          .from('beans')
-          .select('*')
-          .order('created_at', { ascending: false })
-          .order('uid', { ascending: false })).then(beans => beans.filter(row => beverageTypeOf(row) === 'coffee'));
+        const next = await fetchAllRows<BeanListRow>(() => {
+          const query = supabase.from('beans').select('*');
+          return (isCoffee ? query : query.eq('beverage_type', category))
+            .order('created_at', { ascending: false }).order('uid', { ascending: false });
+        }).then(beans => beans.filter(row => beverageTypeOf(row) === category));
         setRows(next);
         if (next.length > 0 && !selectedUid) setSelectedUid(next[0].uid);
         if (next.length === 0) setSelectedUid(null);
@@ -208,32 +202,35 @@ export function BeanHistoryPage({ user, isGuest = false }: Props) {
   // -----------------------------------------------------------------------
 
   async function saveEdit() {
-    if (!selected || !editDraft) return;
+    if ((!creating && !selected) || !editDraft || editSaving) return;
     setEditError(null);
     setEditSaving(true);
     try {
+      if (!isCoffee && !editDraft.bean_name.trim()) throw new Error(t('beverage.error.name'));
+      const uid = creating ? (draftUid.current ??= crypto.randomUUID()) : selected!.uid;
       const patch = {
-        ...(editDraft.beverage_type && editDraft.beverage_type !== beverageTypeOf(selected)
+        uid,
+        ...productFields(editDraft),
+        ...(editDraft.beverage_type && (creating || editDraft.beverage_type !== category)
           ? { beverage_type: editDraft.beverage_type } : {}),
-        bean_name: editDraft.bean_name.trim() || null,
-        roastery: editDraft.roastery.trim() || null,
-        producer: editDraft.producer.trim() || null,
-        origin_location: editDraft.origin_location.trim() || null,
-        origin_country: editDraft.origin_country.trim() || null,
-        process: editDraft.process.trim() || null,
-        varietal: editDraft.varietal.trim() || null,
-        cup_notes: editDraft.cup_notes.trim() || null,
-        cup_flavor_notes: (editDraft.cup_flavor_notes as FlavorNote[]) || [],
-        roasted_on: editDraft.roasted_on || null
+        ...(category !== 'coffee' ? { beverage_details: parseBeverageDetails(
+          editDraft.details, beverageItemFields[category], t, creating ? undefined : selected?.beverage_details,
+        ) } : {}),
       };
 
       if (isGuest) {
-        localSaveData({ beans: [{ uid: selected.uid, ...patch }] });
+        localSaveData({ beans: [patch] });
       } else {
-        await saveCloudData({ beans: [{ uid: selected.uid, ...patch }] });
+        await saveCloudData({ beans: [patch] });
       }
 
       await refresh();
+      if (creating) {
+        setSelectedUid(uid);
+        setSaveMsg(t('beverage.saved'));
+      }
+      draftUid.current = null;
+      setCreating(false);
       setIsEditing(false);
       setEditDraft(null);
     } catch (e) {
@@ -249,7 +246,7 @@ export function BeanHistoryPage({ user, isGuest = false }: Props) {
 
   async function deleteSelectedBean() {
     if (!selected) return;
-    if (!window.confirm(t('beanHistory.delete.confirm'))) return;
+    if (!window.confirm(t(isCoffee ? 'beanHistory.delete.confirm' : 'beverage.deleteItem'))) return;
     setDeleteBusy(true);
     try {
       if (isGuest) {
@@ -273,6 +270,7 @@ export function BeanHistoryPage({ user, isGuest = false }: Props) {
     const payload = {
       type: 'beanlog.bean_history',
       version: 1,
+      ...(isCoffee ? {} : { beverage_type: category }),
       exported_at: new Date().toISOString(),
       count: rows.length,
       beans: rows.map((row) => ({
@@ -307,13 +305,15 @@ export function BeanHistoryPage({ user, isGuest = false }: Props) {
 
   useEffect(() => {
     void refresh();
-  }, [user.uid, isGuest]);
+  }, [user.uid, isGuest, category]);
 
   useEffect(() => {
     setSelectedUid(selected?.uid ?? null);
-    setIsEditing(false);
-    setEditDraft(null);
-    setEditError(null);
+    if (!creating) {
+      setIsEditing(false);
+      setEditDraft(null);
+      setEditError(null);
+    }
   }, [selected?.uid]);
 
   // -----------------------------------------------------------------------
@@ -335,16 +335,24 @@ export function BeanHistoryPage({ user, isGuest = false }: Props) {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-3 flex-wrap">
-        <h2 className="text-lg font-semibold">{t('beanHistory.title')}</h2>
+        <h2 className="text-lg font-semibold">{t(isCoffee ? 'beanHistory.title' : `beverage.library.${category}`)}</h2>
         <div className="flex items-center gap-2 flex-wrap">
-          <button
+          {isCoffee ? <button
             type="button"
             className="px-3 py-2 rounded-lg border bg-white text-sm hover:bg-gray-50 whitespace-nowrap"
             onClick={() => setMode('print')}
             disabled={rows.length === 0}
           >
             {t('beanLabels.printMode')}
-          </button>
+          </button> : <button type="button" disabled={creating || loading || editSaving}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-amber-700 px-3 py-2 text-sm text-white hover:bg-amber-800 disabled:opacity-50"
+            onClick={() => {
+              setCreating(true); setIsEditing(true); setEditError(null); setSaveMsg(null);
+              draftUid.current = null;
+              setEditDraft(productDraft(category));
+            }}>
+            <Plus size={16} aria-hidden="true" />{t(`beverage.newItem.${category}`)}
+          </button>}
           <button
             type="button"
             className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border bg-white text-sm hover:bg-gray-50 disabled:bg-gray-100 whitespace-nowrap"
@@ -367,36 +375,45 @@ export function BeanHistoryPage({ user, isGuest = false }: Props) {
 
       {error && <div className="text-sm text-red-700 bg-red-50 border border-red-100 rounded-lg p-2">{error}</div>}
       {exportMsg && <div className="text-xs text-gray-600 bg-gray-50 border border-gray-200 rounded-lg p-2">{exportMsg}</div>}
+      {saveMsg && <p role="status" className="text-sm text-green-700">{saveMsg}</p>}
 
-      {rows.length === 0 && !loading && (
+      {rows.length === 0 && !creating && !loading && (
         <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 text-sm text-gray-600">
-          {t('beanHistory.empty')}
+          {t(isCoffee ? 'beanHistory.empty' : 'beverage.emptyItems')}
         </div>
       )}
 
-      {rows.length > 0 && (
+      {(rows.length > 0 || creating) && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           {/* Bean list */}
           <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden flex flex-col">
             <div className="px-4 py-3 border-b bg-gray-50 text-sm font-medium text-gray-700">
-              {t('beanHistory.list.title')}
+              {t(isCoffee ? 'beanHistory.list.title' : 'beverage.itemList')}
             </div>
-            <div className="divide-y overflow-y-auto max-h-[560px]">
+            <div className="divide-y overflow-y-auto max-h-64 lg:max-h-[560px]">
               {rows.map((r) => {
-                const active = selected?.uid === r.uid;
+                const active = !creating && selected?.uid === r.uid;
                 return (
                   <button
                     key={r.uid}
                     type="button"
+                    aria-pressed={active}
+                    disabled={editSaving}
                     className={`w-full text-left px-4 py-3 hover:bg-gray-50 transition-colors ${
                       active ? 'bg-amber-50 border-l-2 border-l-amber-600' : 'bg-white border-l-2 border-l-transparent'
                     }`}
-                    onClick={() => setSelectedUid(r.uid)}
+                    onClick={() => {
+                      if (creating) { setCreating(false); setEditDraft(null); setIsEditing(false); setEditError(null); }
+                      setSaveMsg(null);
+                      setSelectedUid(r.uid);
+                    }}
                   >
                     <div className="text-sm font-medium text-gray-900 truncate">
                       {beanDisplayLabel(r, t('history.bean.fallbackLabel'))}
                     </div>
-                    <div className="text-xs text-gray-500 mt-0.5">{fmtDate(r.roasted_on || r.created_at)}</div>
+                    <div className="text-xs text-gray-500 mt-0.5 truncate">{isCoffee
+                      ? fmtDate(r.roasted_on || r.created_at)
+                      : r.producer || fmtDate(r.created_at)}</div>
                   </button>
                 );
               })}
@@ -406,12 +423,13 @@ export function BeanHistoryPage({ user, isGuest = false }: Props) {
           {/* Bean detail / edit */}
           <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
             <div className="px-4 py-3 border-b bg-gray-50 text-sm font-medium text-gray-700">
-              {isEditing ? t('beanHistory.edit.title') : t('beanHistory.detail.title')}
+              {creating && category !== 'coffee' ? t(`beverage.newItem.${category}`) : isEditing
+                ? t(isCoffee ? 'beanHistory.edit.title' : 'beverage.editItem') : t('beanHistory.detail.title')}
             </div>
 
-            {!selected ? (
+            {!selected && !creating ? (
               <div className="p-4 text-sm text-gray-500">{t('beanHistory.selectPrompt')}</div>
-            ) : !isEditing ? (
+            ) : !isEditing && selected ? (
               <div className="p-4 space-y-3 text-sm">
                 <div className="flex items-center justify-end gap-2 flex-wrap">
                   <button
@@ -419,10 +437,11 @@ export function BeanHistoryPage({ user, isGuest = false }: Props) {
                     className="px-3 py-2 rounded-lg bg-amber-700 text-white text-sm hover:bg-amber-800 whitespace-nowrap"
                     onClick={() => {
                       setIsEditing(true);
-                      setEditDraft(draftFromBean(selected));
+                      setSaveMsg(null);
+                      setEditDraft(productDraft(category, selected));
                     }}
                   >
-                    {t('beanHistory.edit.start')}
+                    {t(isCoffee ? 'beanHistory.edit.start' : 'beverage.editItem')}
                   </button>
                   <button
                     type="button"
@@ -430,11 +449,11 @@ export function BeanHistoryPage({ user, isGuest = false }: Props) {
                     onClick={deleteSelectedBean}
                     disabled={deleteBusy}
                   >
-                    {deleteBusy ? t('beanHistory.delete.deleting') : t('beanHistory.delete.button')}
+                    {deleteBusy ? t('beanHistory.delete.deleting') : t(isCoffee ? 'beanHistory.delete.button' : 'beverage.deleteItemButton')}
                   </button>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {category === 'coffee' ? <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
                     <div className="text-xs text-gray-500">{t('bean.field.name')}</div>
                     <div className="font-medium text-gray-900">{selected.bean_name || t('common.none')}</div>
@@ -467,16 +486,28 @@ export function BeanHistoryPage({ user, isGuest = false }: Props) {
                     <div className="text-xs text-gray-500">{t('bean.field.roastedOn')}</div>
                     <div className="font-medium text-gray-900">{fmtDate(selected.roasted_on) || t('common.none')}</div>
                   </div>
+                </div> : <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <DetailValue label={t('beverage.itemName')}>{selected.bean_name || t('common.none')}</DetailValue>
+                  <DetailValue label={t('bean.field.producer')}>{selected.producer || t('common.none')}</DetailValue>
+                  <DetailValue label={t('bean.field.originCountry')}>{selected.origin_country || t('common.none')}</DetailValue>
+                  <DetailValue label={t('bean.field.originLocation')}>{selected.origin_location || t('common.none')}</DetailValue>
+                  <DetailValue label={t(category === 'tea' ? 'beverage.cultivar' : 'beverage.grape')}>{selected.varietal || t('common.none')}</DetailValue>
+                  {(category === 'tea' || selected.process) && <DetailValue label={t('bean.field.process')}>{selected.process || t('common.none')}</DetailValue>}
+                  <BeverageDetailValues fields={beverageItemFields[category]} values={selected.beverage_details} />
+                </div>}
+                {!isCoffee && (selected.roastery || selected.roasted_on) && <details className="text-sm text-gray-600">
+                  <summary>{t('beverage.legacy')}</summary>
+                  <p>{[selected.roastery, fmtDate(selected.roasted_on)].filter(Boolean).join(' · ')}</p>
+                </details>}
+
+                <div>
+                  <div className="text-xs text-gray-500">{t(isCoffee ? 'bean.field.notesFreeText' : 'beverage.itemNotes')}</div>
+                  <div className="whitespace-pre-wrap break-words text-gray-900">{selected.cup_notes || t('common.none')}</div>
                 </div>
 
                 <div>
-                  <div className="text-xs text-gray-500">{t('bean.field.notesFreeText')}</div>
-                  <div className="whitespace-pre-wrap text-gray-900">{selected.cup_notes || t('common.none')}</div>
-                </div>
-
-                <div>
-                  <div className="text-xs text-gray-500">{t('bean.field.cupNotesSca')}</div>
-                  <NoteDotsList notes={selected.cup_flavor_notes as FlavorNote[] | null} emptyLabel={t('common.none')} />
+                  <div className="text-xs text-gray-500">{t(isCoffee ? 'bean.field.cupNotesSca' : 'beverage.flavorNotes')}</div>
+                  <NoteDotsList beverageType={category} notes={selected.cup_flavor_notes} emptyLabel={t('common.none')} />
                 </div>
               </div>
             ) : editDraft ? (
@@ -487,6 +518,8 @@ export function BeanHistoryPage({ user, isGuest = false }: Props) {
                     className="px-3 py-2 rounded-lg border bg-white text-sm hover:bg-gray-50 whitespace-nowrap"
                     onClick={() => {
                       setIsEditing(false);
+                      setCreating(false);
+                      draftUid.current = null;
                       setEditDraft(null);
                       setEditError(null);
                     }}
@@ -500,12 +533,13 @@ export function BeanHistoryPage({ user, isGuest = false }: Props) {
                     onClick={() => void saveEdit()}
                     disabled={editSaving}
                   >
-                    {editSaving ? t('beanHistory.edit.save.saving') : t('beanHistory.edit.save')}
+                    {editSaving ? t('beanHistory.edit.save.saving') : t(creating ? 'beverage.saveItem' : 'beanHistory.edit.save')}
                   </button>
                 </div>
 
                 {editError && <div className="text-sm text-red-700 bg-red-50 border border-red-100 rounded-lg p-2">{editError}</div>}
 
+                {category === 'coffee' ? <>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div className="sm:col-span-2">
                     <label className="block text-xs font-medium text-gray-500 mb-1">{t('bean.field.name')}</label>
@@ -591,8 +625,16 @@ export function BeanHistoryPage({ user, isGuest = false }: Props) {
                   value={editDraft.cup_flavor_notes}
                   onChange={(next) => setEditDraft({ ...editDraft, cup_flavor_notes: next })}
                 />
-                <BeverageTypeSelect value={editDraft.beverage_type ?? 'coffee'}
-                  onChange={beverage_type => setEditDraft({ ...editDraft, beverage_type })} />
+                </> : <>
+                  {creating && <PhotoImportPanel prompt={importPrompt} onImport={raw => {
+                    const { beverage_details, ...fields } = parseBeverageImportJson(raw, category);
+                    setEditDraft({ ...productDraft(category), ...fields, details: textDetails(beverage_details) });
+                    setEditError(null);
+                  }} />}
+                  <BeverageItemFields category={category} draft={editDraft} set={setEditDraft} />
+                </>}
+                {!creating && <BeverageTypeSelect value={editDraft.beverage_type ?? category}
+                  onChange={beverage_type => setEditDraft({ ...editDraft, beverage_type })} />}
               </div>
             ) : null}
           </div>

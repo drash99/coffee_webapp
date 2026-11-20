@@ -263,7 +263,7 @@ function commonFields(record: JsonRecord, category: BeverageType) {
   };
 }
 
-export function buildBeverageImportPrompt(category: NonCoffeeBeverage, savedItems: BeanRow[]): string {
+export function buildBeverageImportPrompt(category: NonCoffeeBeverage, savedItems: (BeanImportSavedBean & Pick<BeanRow, 'beverage_type'>)[]): string {
   const items = savedItems.filter(row => beverageTypeOf(row) === category);
   const fields = beverageItemFields[category];
   const wheel = beverageFlavorWheels[category];

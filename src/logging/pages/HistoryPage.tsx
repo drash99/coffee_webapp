@@ -1,10 +1,11 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ClipboardCopy } from 'lucide-react';
 import type { AppUser } from '../../auth/types';
 import { getSupabaseClient } from '../../config/supabase';
-import type { BeanRow, BrewRow, FlavorNote, GrinderRow } from '../types';
+import type { BeanRow, BeverageType, BrewRow, FlavorNote, GrinderRow } from '../types';
 import { useI18n } from '../../i18n/I18nProvider';
 import { AutocompleteInput } from '../components/AutocompleteInput';
+import { BeverageDetailsFields, BeverageDetailValues, BeverageField, DetailValue, beverageInputClass } from '../components/BeverageFields';
 import { FlavorWheelPicker } from '../components/FlavorWheelPicker';
 import { NoteDotsList } from '../components/NoteDotsList';
 import { StarRating } from '../components/StarRating';
@@ -13,6 +14,8 @@ import { toNullableNumber, fmtDate, isoToYmd, unique } from '../utils/formatting
 import { fetchAllRows } from '../utils/pagination';
 import { saveCloudData } from '../storage/cloudDb';
 import { beverageTypeOf } from '../utils/beverage';
+import { beverageItemFields, beverageTastingFields, beverageWaterTemperature, detailOptionKey, parseBeverageDetails,
+  textDetails, type DetailsDraft } from '../utils/beverageFields';
 import { prepareGrinder, type PreparedGrinder } from '../utils/grinder';
 import { getStorageErrorMessage } from '../utils/storageError';
 import { validateLocalData } from '../storage/localDataValidation';
@@ -36,6 +39,7 @@ type Props = {
   user: AppUser;
   isGuest?: boolean;
   beanUidFilter?: string;
+  category?: BeverageType;
 };
 
 type SavedBeanOption = Pick<
@@ -66,13 +70,17 @@ type BrewWithBean = BrewRow & {
     | 'varietal'
     | 'roasted_on'
     | 'cup_flavor_notes'
+    | 'cup_notes'
+    | 'created_at'
     | 'beverage_type'
+    | 'beverage_details'
   > | null;
   grinders: Pick<GrinderRow, 'uid' | 'maker' | 'model'> | null;
 };
 
 
 interface Filters {
+  product: string;
   roastery: string;
   country: string;
   location: string;
@@ -87,6 +95,7 @@ interface Filters {
 type SortMode = 'date_desc' | 'date_asc' | 'rating_desc' | 'rating_asc';
 
 const emptyFilters: Filters = {
+  product: '',
   roastery: '',
   country: '',
   location: '',
@@ -115,6 +124,7 @@ type BrewEditDraft = {
   extraction_note: string;
   taste_note: string;
   taste_flavor_notes: FlavorNote[];
+  details: DetailsDraft;
 };
 
 
@@ -141,9 +151,13 @@ function navigate(url: string) {
   window.dispatchEvent(new PopStateEvent('popstate'));
 }
 
-export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
+export function HistoryPage({ user, isGuest = false, beanUidFilter, category = 'coffee' }: Props) {
   const { t, lang } = useI18n();
-  const aiEnabled = getPlatform() === 'ios';
+  const isCoffee = category === 'coffee';
+  const aiEnabled = isCoffee && getPlatform() === 'ios';
+  const sortId = useId();
+  const dateId = useId();
+  const productId = useId();
   const [rows, setRows] = useState<BrewWithBean[]>([]);
   const [savedBeans, setSavedBeans] = useState<SavedBeanOption[]>([]);
   const [guestGrinders, setGuestGrinders] = useState<GrinderRow[]>([]);
@@ -173,7 +187,7 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
   const pendingGrinder = useRef<{ brewUid: string; row: PreparedGrinder } | null>(null);
 
   // --- Suggestions ---
-  const hookGrinderSugg = useGrinderSuggestions(isGuest ? undefined : user.uid);
+  const hookGrinderSugg = useGrinderSuggestions(isGuest || !isCoffee ? undefined : user.uid);
 
   const guestGrinderSugg = useMemo(() => {
     if (!isGuest) return null;
@@ -215,7 +229,8 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
       rating: brew.rating == null ? 0 : Number(brew.rating),
       extraction_note: brew.extraction_note ?? '',
       taste_note: brew.taste_note ?? '',
-      taste_flavor_notes: (brew.taste_flavor_notes ?? []) as FlavorNote[]
+      taste_flavor_notes: brew.taste_flavor_notes ?? [],
+      details: textDetails(brew.beverage_details),
     };
   }
 
@@ -239,6 +254,7 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
     return rows.filter(r => {
       const uidFilter = (beanUidFilter ?? '').trim();
       if (uidFilter && r.bean_uid !== uidFilter) return false;
+      if (!matchesFilter(r.beans?.bean_name, filters.product)) return false;
       if (!matchesFilter(r.beans?.roastery, filters.roastery)) return false;
       if (!matchesFilter(r.beans?.origin_country, filters.country)) return false;
       if (!matchesFilter(r.beans?.origin_location, filters.location)) return false;
@@ -293,6 +309,21 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
 
   const selected = sortedRows.find((r) => r.uid === selectedUid) ?? sortedRows[0] ?? null;
 
+  function tastingSummary(row: BrewWithBean): string {
+    const details = row.beverage_details;
+    const productStyle = row.beans?.beverage_details?.[category === 'tea' ? 'teaStyle' : 'wineStyle'];
+    const style = category !== 'coffee' && typeof productStyle === 'string'
+      && beverageItemFields[category][0].options?.includes(productStyle) ? t(detailOptionKey(productStyle)) : productStyle;
+    const parts = category === 'tea' ? [
+      details?.leafGrams == null ? '' : t('beverage.summary.leaves', { value: details.leafGrams }),
+      details?.steepSeconds == null ? '' : t('beverage.summary.steep', { value: details.steepSeconds }),
+    ] : [
+      details?.serveTemp == null ? '' : t('beverage.summary.temperature', { value: details.serveTemp }),
+      details?.decantMinutes == null ? '' : t('beverage.summary.decant', { value: details.decantMinutes }),
+    ];
+    return parts.filter(Boolean).join(' · ') || String(style ?? row.beans?.producer ?? t('common.none'));
+  }
+
   const activeFilterCount =
     Object.entries(filters).reduce((count, [key, v]) => {
       if (key === 'cupNotes' || key === 'tasteNotes') return count + ((v as FlavorNote[]).length > 0 ? 1 : 0);
@@ -312,10 +343,10 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
         validateLocalData(localData, { allowOrphanLabels: true });
         const data = localListBrewsWithBeans();
         setGuestGrinders(localData.grinders);
-        setRows(data.filter(row => beverageTypeOf(row.beans) === 'coffee'));
+        setRows(data.filter(row => beverageTypeOf(row.beans) === category));
       } else {
         const supabase = getSupabaseClient();
-        const data = await fetchAllRows<BrewWithBean>(() => supabase
+        const data = await fetchAllRows<BrewWithBean>(() => (isCoffee ? supabase
           .from('brews')
           .select(
             `
@@ -339,11 +370,11 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
             beans ( * ),
             grinders ( uid, maker, model )
           `
-          )
+          ) : supabase.from('brews').select('*,beans!inner(*),grinders(uid,maker,model)').eq('beans.beverage_type', category))
           .order('brew_date', { ascending: false })
           .order('created_at', { ascending: false })
           .order('uid', { ascending: false }));
-        setRows(data.filter(row => beverageTypeOf(row.beans) === 'coffee'));
+        setRows(data.filter(row => beverageTypeOf(row.beans) === category));
       }
     } catch (e) {
       setError(getStorageErrorMessage(e, t('common.loadFailed'), t));
@@ -356,16 +387,16 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
     if (isGuest) {
       const localData = localGetAllData();
       validateLocalData(localData, { allowOrphanLabels: true });
-      setSavedBeans(localListBeans().filter(row => beverageTypeOf(row) === 'coffee'));
+      setSavedBeans(localListBeans().filter(row => beverageTypeOf(row) === category));
       return;
     }
     const supabase = getSupabaseClient();
-    const data = await fetchAllRows<SavedBeanOption>(() => supabase
-      .from('beans')
-      .select('*')
-      .order('created_at', { ascending: false })
-      .order('uid', { ascending: false }));
-    setSavedBeans(data.filter(row => beverageTypeOf(row) === 'coffee'));
+    const data = await fetchAllRows<SavedBeanOption>(() => {
+      const query = supabase.from('beans').select('*');
+      return (isCoffee ? query : query.eq('beverage_type', category))
+        .order('created_at', { ascending: false }).order('uid', { ascending: false });
+    });
+    setSavedBeans(data.filter(row => beverageTypeOf(row) === category));
   }
 
   function toAiBeanSummary(bean: BrewWithBean['beans'] | null): AiBeanSummary | null {
@@ -465,11 +496,17 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
   // -----------------------------------------------------------------------
 
   async function saveEditedBrew() {
-    if (!selected || !editDraft) return;
+    if (!selected || !editDraft || editSaving) return;
     setEditError(null);
     let brewDateIso: string;
     try {
-      brewDateIso = new Date(`${editDraft.brew_date}T00:00:00`).toISOString();
+      if (!isCoffee && editDraft.brew_date === isoToYmd(selected.brew_date)) brewDateIso = selected.brew_date;
+      else {
+        if (!isCoffee && new Date(editDraft.brew_date).toISOString().slice(0, 10) !== editDraft.brew_date) {
+          throw new Error();
+        }
+        brewDateIso = new Date(`${editDraft.brew_date}T${isCoffee ? '00' : '12'}:00:00`).toISOString();
+      }
     } catch {
       setEditError(t('newBrew.error.invalidBrewDate'));
       return;
@@ -477,16 +514,23 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
 
     setEditSaving(true);
     try {
+      const commonPatch = {
+        brew_date: brewDateIso,
+        bean_uid: editDraft.bean_uid,
+        rating: editDraft.rating > 0 ? editDraft.rating : null,
+        taste_note: editDraft.taste_note.trim() || null,
+        taste_flavor_notes: editDraft.taste_flavor_notes,
+      };
       const grinder =
-        editDraft.grinder_maker.trim() && editDraft.grinder_model.trim()
+        isCoffee && editDraft.grinder_maker.trim() && editDraft.grinder_model.trim()
           ? await prepareGrinder(editDraft.grinder_maker, editDraft.grinder_model, isGuest,
             pendingGrinder.current?.brewUid === selected.uid ? pendingGrinder.current.row : null)
           : null;
       pendingGrinder.current = grinder ? { brewUid: selected.uid, row: grinder } : null;
 
-      const patch = {
-        brew_date: brewDateIso,
-        bean_uid: editDraft.bean_uid,
+      const { beans: _bean, grinders: _grinder, user_uid: _owner, ...previous } = selected;
+      const patch = category === 'coffee' ? {
+        ...commonPatch,
         grinder_uid: grinder?.uid ?? null,
         grinder_setting: editDraft.grinder_setting.trim() || null,
         recipe: editDraft.recipe.trim() || null,
@@ -496,10 +540,16 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
         water: editDraft.water.trim() || null,
         water_temp_c: toNullableNumber(editDraft.water_temp_c),
         grind_median_um: toNullableNumber(editDraft.grind_median_um),
-        rating: editDraft.rating > 0 ? editDraft.rating : null,
         extraction_note: editDraft.extraction_note.trim() || null,
-        taste_note: editDraft.taste_note.trim() || null,
-        taste_flavor_notes: (editDraft.taste_flavor_notes as FlavorNote[]) || []
+      } : {
+        ...previous,
+        ...commonPatch,
+        ...(category === 'tea' ? {
+          water: editDraft.water.trim() || null,
+          water_temp_c: beverageWaterTemperature(editDraft.water_temp_c, t),
+          recipe: editDraft.recipe.trim() || null,
+        } : {}),
+        beverage_details: parseBeverageDetails(editDraft.details, beverageTastingFields[category], t, selected.beverage_details),
       };
 
       const data = { grinders: grinder ? [grinder] : [], brews: [{ uid: selected.uid, ...patch }] };
@@ -639,20 +689,23 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
 
   async function exportBrewHistoryJson() {
     setExportMsg(null);
+    const { product: _product, ...coffeeFilters } = filters;
     const payload = {
       type: 'beanlog.brew_history',
       version: 1,
+      ...(isCoffee ? {} : { beverage_type: category }),
       exported_at: new Date().toISOString(),
       count: sortedRows.length,
       total_count: rows.length,
       sort: sortMode,
       bean_uid_filter: beanUidFilter ?? null,
-      filters,
+      filters: isCoffee ? coffeeFilters : filters,
       brews: sortedRows.map((row) => ({
         uid: row.uid,
         brew_date: row.brew_date,
         created_at: row.created_at ?? null,
         bean_uid: row.bean_uid,
+        ...(isCoffee ? {} : { beverage_details: row.beverage_details ?? {}, grinder_uid: row.grinder_uid, grinder_setting: row.grinder_setting }),
         bean: row.beans
           ? {
               uid: row.beans.uid,
@@ -665,6 +718,10 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
               varietal: row.beans.varietal,
               roasted_on: row.beans.roasted_on,
               cup_flavor_notes: row.beans.cup_flavor_notes ?? [],
+              ...(isCoffee ? {} : {
+                beverage_type: beverageTypeOf(row.beans), beverage_details: row.beans.beverage_details ?? {},
+                cup_notes: row.beans.cup_notes, created_at: row.beans.created_at ?? null,
+              }),
             }
           : null,
         grinder: row.grinders
@@ -698,7 +755,7 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
 
     try {
       await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
-      setExportMsg(t('history.exportJson.copied', { count: String(sortedRows.length) }));
+      setExportMsg(t(isCoffee ? 'history.exportJson.copied' : 'beverage.exported', { count: String(sortedRows.length) }));
     } catch {
       setExportMsg(t('history.exportJson.failed'));
     }
@@ -710,7 +767,7 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
 
   async function deleteSelectedBrew() {
     if (!selected) return;
-    if (!window.confirm(t('history.delete.confirm'))) return;
+    if (!window.confirm(t(isCoffee ? 'history.delete.confirm' : 'beverage.deleteTasting'))) return;
     setDeleteBusy(true);
     try {
       if (isGuest) {
@@ -737,7 +794,7 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
     void Promise.all([refresh(), refreshSavedBeans()]).catch((e) => {
       setError(getStorageErrorMessage(e, t('common.loadFailed'), t));
     });
-  }, [user.uid, isGuest]);
+  }, [user.uid, isGuest, category]);
 
   useLayoutEffect(() => {
     selectionVersion.current += 1;
@@ -777,7 +834,7 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-3 flex-wrap">
-        <h2 className="text-lg font-semibold">{t('history.title')}</h2>
+        <h2 className="text-lg font-semibold">{t(isCoffee ? 'history.title' : 'beverage.historyTitle')}</h2>
         <div className="flex items-center gap-2 flex-wrap justify-end">
           <button
             type="button"
@@ -823,14 +880,17 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
             )}
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <div>
+            {isCoffee ? <div>
               <label className="block text-xs text-gray-500 mb-1">{t('bean.field.roastery')}</label>
               <AutocompleteInput
                 value={filters.roastery}
                 onChange={(v) => setFilters({ ...filters, roastery: v })}
                 suggestions={suggestions.roasteries}
               />
-            </div>
+            </div> : <BeverageField label={t('beverage.itemName')}>
+              <input className={beverageInputClass} value={filters.product}
+                onChange={event => setFilters({ ...filters, product: event.target.value })} />
+            </BeverageField>}
             <div>
               <label className="block text-xs text-gray-500 mb-1">{t('bean.field.originCountry')}</label>
               <AutocompleteInput
@@ -856,7 +916,7 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
               />
             </div>
             <div>
-              <label className="block text-xs text-gray-500 mb-1">{t('bean.field.varietal')}</label>
+              <label className="block text-xs text-gray-500 mb-1">{t(isCoffee ? 'bean.field.varietal' : category === 'tea' ? 'beverage.cultivar' : 'beverage.grape')}</label>
               <AutocompleteInput
                 value={filters.varietal}
                 onChange={(v) => setFilters({ ...filters, varietal: v })}
@@ -865,7 +925,8 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
             </div>
             <div className="col-span-2 sm:col-span-4">
               <FlavorWheelPicker
-                label={t('bean.field.cupNotesSca')}
+                beverageType={category}
+                label={t(isCoffee ? 'bean.field.cupNotesSca' : 'beverage.itemNotes')}
                 value={filters.cupNotes}
                 onChange={(notes) => setFilters({ ...filters, cupNotes: notes })}
                 maxNotes={10}
@@ -873,12 +934,14 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
             </div>
             <div className="col-span-2 sm:col-span-4">
               <FlavorWheelPicker
-                label={t('brew.field.tasteNotesSca')}
+                beverageType={category}
+                label={t(isCoffee ? 'brew.field.tasteNotesSca' : 'beverage.notes')}
                 value={filters.tasteNotes}
                 onChange={(notes) => setFilters({ ...filters, tasteNotes: notes })}
                 maxNotes={10}
               />
             </div>
+            {isCoffee && <>
             <div>
               <label className="block text-xs text-gray-500 mb-1">{t('grinder.field.maker')}</label>
               <AutocompleteInput
@@ -895,6 +958,7 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
                 suggestions={suggestions.grinderModels}
               />
             </div>
+            </>}
           </div>
           <div className="text-xs text-gray-500">
             {t('history.filter.showing', { shown: sortedRows.length, total: rows.length })}
@@ -907,12 +971,13 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden flex flex-col">
-          <div className="px-4 py-3 border-b bg-gray-50 flex items-center justify-between gap-3">
-            <div className="text-sm font-medium text-gray-700 whitespace-nowrap">{t('history.list.title')}</div>
-            <div className="flex items-center gap-2">
-              <label className="text-xs text-gray-500 whitespace-nowrap">{t('history.sort.label')}</label>
+          <div className="px-4 py-3 border-b bg-gray-50 flex flex-wrap items-center justify-between gap-3">
+            <div className="text-sm font-medium text-gray-700">{t(isCoffee ? 'history.list.title' : 'beverage.tastingList')}</div>
+            <div className="flex min-w-0 items-center gap-2">
+              <label htmlFor={sortId} className="text-xs text-gray-500">{t('history.sort.label')}</label>
               <select
-                className="text-xs border rounded-md px-2 py-1 bg-white"
+                id={sortId}
+                className="min-w-0 text-base border rounded-md px-2 py-1 bg-white sm:text-xs"
                 value={sortMode}
                 onChange={(e) => setSortMode(e.target.value as SortMode)}
               >
@@ -924,9 +989,9 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
             </div>
           </div>
           {sortedRows.length === 0 && !loading ? (
-            <div className="p-4 text-sm text-gray-500">{t('history.empty')}</div>
+            <div className="p-4 text-sm text-gray-500">{t(isCoffee ? 'history.empty' : 'beverage.emptyTastings')}</div>
           ) : (
-            <div className="divide-y overflow-y-auto max-h-[560px]">
+            <div className="divide-y overflow-y-auto max-h-64 lg:max-h-[560px]">
               {sortedRows.map((r) => {
                 const beanLabel =
                   r.beans?.bean_name ||
@@ -939,6 +1004,8 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
                   <button
                     key={r.uid}
                     type="button"
+                    aria-pressed={active}
+                    disabled={editSaving}
                     onClick={() => setSelectedUid(r.uid)}
                     className={`w-full text-left px-4 py-3 hover:bg-gray-50 transition-colors ${
                       active ? 'bg-amber-50 border-l-2 border-l-amber-600' : 'bg-white border-l-2 border-l-transparent'
@@ -949,11 +1016,11 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
                     </div>
                     <div className="flex items-center justify-between gap-2 mt-0.5">
                       <div className="text-xs text-gray-500 truncate">
-                        {t('history.list.summary', {
+                        {isCoffee ? t('history.list.summary', {
                           dose: r.coffee_dose_g ?? t('common.none'),
                           yield: r.coffee_yield_g ?? t('common.none'),
                           tds: r.coffee_tds ?? t('common.na')
-                        })}
+                        }) : tastingSummary(r)}
                       </div>
                       <div className="text-xs text-amber-700 font-medium whitespace-nowrap">
                         ★ {r.rating == null ? t('common.none') : Number(r.rating).toFixed(1)}
@@ -981,14 +1048,14 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
             )}
           </div>
           {!selected ? (
-            <div className="p-4 text-sm text-gray-500">{t('history.selectPrompt')}</div>
+            <div className="p-4 text-sm text-gray-500">{t(isCoffee ? 'history.selectPrompt' : 'beverage.selectTasting')}</div>
           ) : (
             <div className="p-4 space-y-3 text-sm">
               <div className="flex items-center justify-end gap-2 flex-wrap">
                 {!isEditing ? (
                   <>
                     {/* Share brew — Supabase only */}
-                    {!isGuest && (
+                    {isCoffee && !isGuest && (
                       <button
                         type="button"
                         className="px-3 py-2 rounded-lg border bg-white text-sm hover:bg-gray-50 disabled:bg-gray-100 whitespace-nowrap"
@@ -998,6 +1065,7 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
                         {shareBusy ? t('history.share.creating') : t('history.share.button')}
                       </button>
                     )}
+                    {isCoffee && <>
                     <button
                       type="button"
                       className="px-3 py-2 rounded-lg border bg-white text-sm hover:bg-gray-50 disabled:bg-gray-100 whitespace-nowrap"
@@ -1017,6 +1085,7 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
                     >
                       {t('history.duplicate.button')}
                     </button>
+                    </>}
                     <button
                       type="button"
                       className="px-3 py-2 rounded-lg bg-amber-700 text-white text-sm hover:bg-amber-800 whitespace-nowrap"
@@ -1026,7 +1095,7 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
                         setEditError(null);
                       }}
                     >
-                      {t('history.edit.start')}
+                      {t(isCoffee ? 'history.edit.start' : 'beverage.editTasting')}
                     </button>
                     <button
                       type="button"
@@ -1034,7 +1103,7 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
                       onClick={deleteSelectedBrew}
                       disabled={deleteBusy}
                     >
-                      {deleteBusy ? t('history.delete.deleting') : t('history.delete.button')}
+                      {deleteBusy ? t('history.delete.deleting') : t(isCoffee ? 'history.delete.button' : 'beverage.deleteTastingButton')}
                     </button>
                   </>
                 ) : (
@@ -1184,18 +1253,20 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
                 <div className="space-y-3">
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-xs text-gray-500 mb-1">{t('history.detail.date')}</label>
+                      <label htmlFor={dateId} className="block text-xs text-gray-500 mb-1">{t(isCoffee ? 'history.detail.date' : 'beverage.date')}</label>
                       <input
-                        className="w-full p-2 border rounded-lg"
+                        id={dateId}
+                        className="w-full p-2 border rounded-lg text-base"
                         type="date"
                         value={editDraft.brew_date}
                         onChange={(e) => setEditDraft({ ...editDraft, brew_date: e.target.value })}
                       />
                     </div>
                     <div>
-                      <label className="block text-xs text-gray-500 mb-1">{t('history.detail.bean')}</label>
+                      <label htmlFor={productId} className="block text-xs text-gray-500 mb-1">{t(isCoffee ? 'history.detail.bean' : 'beverage.savedItem')}</label>
                       <select
-                        className="w-full p-2 border rounded-lg bg-white"
+                        id={productId}
+                        className="w-full min-w-0 p-2 border rounded-lg bg-white text-base"
                         value={editDraft.bean_uid}
                         onChange={(e) => setEditDraft({ ...editDraft, bean_uid: e.target.value })}
                       >
@@ -1206,6 +1277,7 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
                         ))}
                       </select>
                     </div>
+                    {isCoffee && <>
                     <div>
                       <label className="block text-xs text-gray-500 mb-1">{t('grinder.field.maker')}</label>
                       <AutocompleteInput
@@ -1230,6 +1302,7 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
                         onChange={(e) => setEditDraft({ ...editDraft, grinder_setting: e.target.value })}
                       />
                     </div>
+                    </>}
                     <div className="sm:col-span-2">
                       <label className="block text-xs text-gray-500 mb-1">{t('brew.field.rating')}</label>
                       <div className="flex items-center gap-3">
@@ -1241,6 +1314,7 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
                         <div className="text-sm text-gray-600 tabular-nums">{editDraft.rating.toFixed(1)}</div>
                       </div>
                     </div>
+                    {isCoffee ? <>
                     <div>
                       <label className="block text-xs text-gray-500 mb-1">{t('brew.field.dose')}</label>
                       <input
@@ -1314,33 +1388,87 @@ export function HistoryPage({ user, isGuest = false, beanUidFilter }: Props) {
                         suggestions={suggestions.recipes}
                       />
                     </div>
+                    </> : category === 'tea' && <>
+                      <BeverageField label={t('brew.field.water')}><input className={beverageInputClass}
+                        value={editDraft.water} onChange={event => setEditDraft({ ...editDraft, water: event.target.value })} /></BeverageField>
+                      <BeverageField label={t('brew.field.waterTemp', { unit: 'C' })}><input className={beverageInputClass}
+                        type="number" min="0" max="100" step="any" inputMode="decimal" value={editDraft.water_temp_c}
+                        onChange={event => setEditDraft({ ...editDraft, water_temp_c: event.target.value })} /></BeverageField>
+                      <div className="sm:col-span-2">
+                        <BeverageField label={t('brew.field.recipe')}><textarea className={beverageInputClass} rows={3}
+                          value={editDraft.recipe} onChange={event => setEditDraft({ ...editDraft, recipe: event.target.value })} /></BeverageField>
+                      </div>
+                    </>}
                   </div>
 
+                  {category !== 'coffee' && <BeverageDetailsFields fields={beverageTastingFields[category]} values={editDraft.details}
+                    change={details => setEditDraft({ ...editDraft, details })} />}
+
                   <FlavorWheelPicker
-                    label={t('brew.field.tasteNotesSca')}
+                    beverageType={category}
+                    label={t(isCoffee ? 'brew.field.tasteNotesSca' : 'beverage.flavorNotes')}
                     value={editDraft.taste_flavor_notes}
                     onChange={(next) => setEditDraft({ ...editDraft, taste_flavor_notes: next })}
                   />
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div>
+                    {isCoffee && <div>
                       <label className="block text-xs text-gray-500 mb-1">{t('brew.field.extractionNote')}</label>
                       <textarea
                         className="w-full p-2 border rounded-lg min-h-24"
                         value={editDraft.extraction_note}
                         onChange={(e) => setEditDraft({ ...editDraft, extraction_note: e.target.value })}
                       />
-                    </div>
-                    <div>
-                      <label className="block text-xs text-gray-500 mb-1">{t('brew.field.tasteNoteFreeText')}</label>
+                    </div>}
+                    <div className={isCoffee ? undefined : 'sm:col-span-2'}>
+                      <label htmlFor={`${dateId}-notes`} className="block text-xs text-gray-500 mb-1">{t(isCoffee ? 'brew.field.tasteNoteFreeText' : 'beverage.notes')}</label>
                       <textarea
-                        className="w-full p-2 border rounded-lg min-h-24"
+                        id={`${dateId}-notes`}
+                        className="w-full p-2 border rounded-lg min-h-24 text-base"
                         value={editDraft.taste_note}
                         onChange={(e) => setEditDraft({ ...editDraft, taste_note: e.target.value })}
                       />
                     </div>
                   </div>
                   {editError && <div className="text-sm text-red-700 bg-red-50 border border-red-100 rounded-lg p-2">{editError}</div>}
+                </div>
+              ) : category !== 'coffee' ? (
+                <div className="space-y-3">
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <DetailValue label={t('beverage.date')}>{fmtDate(selected.brew_date)}</DetailValue>
+                    <DetailValue label={t('beverage.savedItem')}>{selected.beans?.bean_name || t('common.none')}</DetailValue>
+                    <DetailValue label={t('bean.field.producer')}>{selected.beans?.producer || t('common.none')}</DetailValue>
+                    <DetailValue label={t('bean.field.originLocation')}>{selected.beans?.origin_location || t('common.none')}</DetailValue>
+                    <DetailValue label={t('bean.field.originCountry')}>{selected.beans?.origin_country || t('common.none')}</DetailValue>
+                    <DetailValue label={t(category === 'tea' ? 'beverage.cultivar' : 'beverage.grape')}>{selected.beans?.varietal || t('common.none')}</DetailValue>
+                    <BeverageDetailValues fields={beverageItemFields[category]} values={selected.beans?.beverage_details} />
+                    <DetailValue label={t('history.detail.rating')}>{selected.rating == null ? t('common.none') : selected.rating.toFixed(1)}</DetailValue>
+                  </div>
+                  <div className="grid grid-cols-1 gap-3 border-t border-gray-100 pt-3 sm:grid-cols-2">
+                    <BeverageDetailValues fields={beverageTastingFields[category]} values={selected.beverage_details} />
+                    {category === 'tea' && <>
+                      <DetailValue label={t('history.detail.water')}>{selected.water || t('common.none')}</DetailValue>
+                      <DetailValue label={t('history.detail.waterTemp')}>{selected.water_temp_c == null ? t('common.none') : `${selected.water_temp_c}°C`}</DetailValue>
+                      <div className="whitespace-pre-wrap sm:col-span-2">
+                        <DetailValue label={t('history.detail.recipe')}>{selected.recipe || t('common.none')}</DetailValue>
+                      </div>
+                    </>}
+                  </div>
+                  <div>
+                    <div className="text-xs text-gray-500">{t('beverage.itemNotes')}</div>
+                    <NoteDotsList beverageType={category} notes={selected.beans?.cup_flavor_notes} emptyLabel={t('common.none')} />
+                  </div>
+                  <div>
+                    <div className="text-xs text-gray-500">{t('beverage.flavorNotes')}</div>
+                    <NoteDotsList beverageType={category} notes={selected.taste_flavor_notes} emptyLabel={t('common.none')} />
+                  </div>
+                  <div className="whitespace-pre-wrap"><DetailValue label={t('beverage.notes')}>{selected.taste_note || t('common.none')}</DetailValue></div>
+                  {(selected.coffee_dose_g != null || selected.coffee_yield_g != null || selected.extraction_note) &&
+                    <details className="text-sm text-gray-600"><summary>{t('beverage.legacy')}</summary>
+                      {selected.coffee_dose_g != null && <p>{t('brew.field.dose')}: {selected.coffee_dose_g} g</p>}
+                      {selected.coffee_yield_g != null && <p>{t('brew.field.yield')}: {selected.coffee_yield_g} g</p>}
+                      {selected.extraction_note && <p className="whitespace-pre-wrap break-words">{selected.extraction_note}</p>}
+                    </details>}
                 </div>
               ) : (
                 <div className="space-y-3">

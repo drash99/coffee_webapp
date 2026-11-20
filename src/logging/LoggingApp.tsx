@@ -259,11 +259,10 @@ export function LoggingApp({
           initialDoseG={initialDoseG}
         />
       )}
-      {category === 'coffee' && logTab === 'history' && <HistoryPage user={user} isGuest={isGuest} beanUidFilter={linkedHistoryBean} />}
-      {category === 'coffee' && logTab === 'beans' && <BeanHistoryPage user={user} isGuest={isGuest} />}
-      {category !== 'coffee' && <BeverageJournalPage key={`${category}:${logTab}:${linkedBean ?? ''}:${linkedHistoryBean ?? ''}`}
-        user={user} isGuest={isGuest} category={category} mode={logTab}
-        initialBeanUid={logTab === 'history' ? linkedHistoryBean : linkedBean} />}
+      {logTab === 'history' && <HistoryPage key={category} user={user} isGuest={isGuest} category={category} beanUidFilter={linkedHistoryBean} />}
+      {logTab === 'beans' && <BeanHistoryPage key={category} user={user} isGuest={isGuest} category={category} />}
+      {category !== 'coffee' && logTab === 'new' && <BeverageJournalPage key={`${category}:${linkedBean ?? ''}`}
+        user={user} isGuest={isGuest} category={category} initialBeanUid={linkedBean} />}
 
       {native && (
         <nav

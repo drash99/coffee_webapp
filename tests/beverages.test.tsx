@@ -70,14 +70,24 @@ it('stores wine metadata and restores it through guest backup', async () => {
     beverage_details: { wineStyle: 'red', vintage: 2022, abv: 13.5 } });
   expect(localGetAllData().brews[0].beverage_details).toEqual({ tannins: 'medium', pairing: 'Mushroom risotto' });
   click('History');
-  const tasting = await screen.findByRole('option', { name: /Cellar Pinot Noir/ });
-  change('History', (tasting as HTMLOptionElement).value);
+  const tasting = await screen.findByRole('button', { name: /Cellar Pinot Noir/ });
+  expect(tasting.getAttribute('aria-pressed')).toBe('true');
+  expect(screen.getByText('Mushroom risotto')).toBeTruthy();
+  expect(screen.getByText('2022')).toBeTruthy();
+  click('Edit tasting');
   expect((screen.getByLabelText('Food pairing') as HTMLInputElement).value).toBe('Mushroom risotto');
+  expect(screen.queryByLabelText('Steep time (seconds)')).toBeNull();
+  change('Food pairing', 'Roasted mushrooms');
+  click('Save changes');
+  await screen.findByText('Roasted mushrooms');
   try {
     click('Export JSON');
     await screen.findByText('Copied 1 records as JSON.');
     expect(JSON.parse(writeText.mock.calls[0][0])).toMatchObject({
-      beverage_type: 'wine', count: 1, brews: [{ bean: { bean_name: 'Cellar Pinot Noir' }, beverage_details: { tannins: 'medium' } }],
+      beverage_type: 'wine', count: 1, brews: [{
+        bean: { bean_name: 'Cellar Pinot Noir', beverage_details: { vintage: 2022 } },
+        beverage_details: { tannins: 'medium', pairing: 'Roasted mushrooms' },
+      }],
     });
     expect(writeText.mock.calls[0][0]).not.toContain('user_uid');
   } finally {
@@ -114,12 +124,23 @@ it.each([
   expect(localGetAllData().beans[0].cup_flavor_notes).toEqual(data.beans![0].cup_flavor_notes);
   expect(localGetAllData().brews[0]).toMatchObject(data.brews![0]);
   click('Tea');
-  expect(await screen.findByRole('option', { name })).toBeTruthy();
+  expect(await screen.findByRole('button', { name: new RegExp(name) })).toBeTruthy();
+  expect(screen.getByText('Original record details')).toBeTruthy();
+  expect(screen.queryByRole('button', { name: 'Print label' })).toBeNull();
   click('History');
-  const tasting = await screen.findByRole('option', { name: label => label.includes(name) });
-  fireEvent.change(tasting.parentElement!, { target: { value: brewId } });
-  expect((screen.getByLabelText('Tasting notes') as HTMLTextAreaElement).value).toBe('Old session');
+  const tasting = await screen.findByRole('button', { name: label => label.includes(name) });
+  expect(tasting.getAttribute('aria-pressed')).toBe('true');
+  expect(screen.getByText('Old session')).toBeTruthy();
   expect(screen.getByText('Sweet / Honey')).toBeTruthy();
+  click('Edit tasting');
+  change('Tasting notes', 'Updated tea session');
+  change('Steep time (seconds)', '45');
+  click('Save changes');
+  await screen.findByText('Updated tea session');
+  expect(localGetAllData().brews[0]).toMatchObject({
+    uid: brewId, brew_date: data.brews![0].brew_date, bean_uid: beanId, coffee_dose_g: 6,
+    beverage_details: { steepSeconds: 45 }, taste_flavor_notes: data.brews![0].taste_flavor_notes,
+  });
   click('Coffee');
   const history = await screen.findByRole('heading', { name: 'Brew history' });
   expect(within(history.parentElement!).queryByText(name)).toBeNull();
@@ -171,6 +192,7 @@ it('copies the wine prompt with wine references and imports only matching JSON f
   try {
     mount({ initialLogTab: 'beans' });
     click('Wine');
+    click('New wine');
     click('Copy prompt');
     await screen.findByText('Prompt copied. Paste it into your LLM with the label photo.');
     expect(writeText.mock.calls[0][0]).toContain('Cellar Estate');
@@ -197,4 +219,42 @@ it('copies the wine prompt with wine references and imports only matching JSON f
     if (originalClipboard) Object.defineProperty(navigator, 'clipboard', originalClipboard);
     else Reflect.deleteProperty(navigator, 'clipboard');
   }
+});
+
+it('lists tea products and tastings with selection, filters, sorting and editing', async () => {
+  mount();
+  click('Tea');
+  change('Name', 'Garden Sencha');
+  change('Style', 'green');
+  change('Tasting date', '2026-11-19');
+  change('Tasting notes', 'Grassy notes');
+  click('Save tasting');
+  await screen.findByText('Saved.');
+  change('Saved beverage', '');
+  change('Name', 'Mountain Oolong');
+  change('Style', 'oolong');
+  change('Tasting date', '2026-11-20');
+  change('Tasting notes', 'Floral notes');
+  click('Save tasting');
+  await waitFor(() => expect(localGetAllData().brews).toHaveLength(2));
+  click('Teas');
+  expect(await screen.findByText('Your beverages')).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: /^Garden Sencha/ }));
+  expect(screen.getByText('Green')).toBeTruthy();
+  click('Edit beverage');
+  change('Harvest / season', 'First flush');
+  click('Save changes');
+  await screen.findByText('First flush');
+  expect(localGetAllData().beans.find(row => row.bean_name === 'Garden Sencha')?.beverage_details)
+    .toEqual({ teaStyle: 'green', harvest: 'First flush' });
+  click('History');
+  expect(await screen.findByText('Floral notes')).toBeTruthy();
+  change('Sort', 'date_asc');
+  const entries = screen.getAllByRole('button', { name: /2026.*(Sencha|Oolong)/ });
+  expect(entries[0].textContent).toContain('Garden Sencha');
+  click('Filter');
+  change('Name', 'Sencha');
+  expect(screen.getByText('Grassy notes')).toBeTruthy();
+  expect(screen.queryByText('Floral notes')).toBeNull();
+  expect(screen.queryByRole('button', { name: /Mountain Oolong/ })).toBeNull();
 });

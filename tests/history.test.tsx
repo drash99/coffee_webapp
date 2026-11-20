@@ -56,12 +56,14 @@ function deferred<T>() {
 let beans: BeanRow[];
 let brews: BrewRow[];
 let orders: Array<{ table: string; column: string }>;
+let scopes: Array<{ table: string; column: string; value: string }>;
 
 beforeEach(() => {
   vi.clearAllMocks();
   beans = [bean(beanA, 'Alpha'), bean(beanB, 'Beta')];
   brews = [brew(brewA, beanA, 'Recipe Alpha'), brew(brewB, beanB, 'Recipe Beta')];
   orders = [];
+  scopes = [];
   mocks.clipboard.mockResolvedValue(undefined);
   Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: mocks.clipboard } });
   mocks.rpc.mockResolvedValue({ data: null, error: null });
@@ -71,7 +73,7 @@ beforeEach(() => {
     const query = {
       select: () => query,
       order: (column: string) => { orders.push({ table, column }); return query; },
-      eq: () => query,
+      eq: (column: string, value: string) => { scopes.push({ table, column, value }); return query; },
       ilike: () => query,
       limit: () => query,
       maybeSingle: () => table === 'brew_shares' ? mocks.shareLookup() : Promise.resolve({ data: null, error: null }),
@@ -93,6 +95,22 @@ function seedGuest() {
 }
 
 describe('visible history selection', () => {
+  it('loads cloud tea products and tastings in the shared views without showing coffee actions or records', async () => {
+    beans[0] = { ...beans[0], bean_name: 'Cloud Tea', beverage_type: 'tea', beverage_details: { teaStyle: 'oolong' } };
+    brews[0] = { ...brews[0], beverage_details: { steepSeconds: 45 } };
+    const { unmount } = render(<BeanHistoryPage user={user} category="tea" />);
+    expect(await screen.findByRole('button', { name: /Cloud Tea/ })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Beta/ })).toBeNull();
+    expect(scopes).toContainEqual({ table: 'beans', column: 'beverage_type', value: 'tea' });
+    unmount();
+    render(<HistoryPage user={user} category="tea" />);
+    expect(await screen.findByRole('button', { name: /Cloud Tea/ })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Beta/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'history.ai.button' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'history.share.button' })).toBeNull();
+    expect(scopes).toContainEqual({ table: 'brews', column: 'beans.beverage_type', value: 'tea' });
+  });
+
   it('selects the filtered brew initially, edits that brew, and clears details on an empty filter', async () => {
     seedGuest();
     const { rerender } = render(<HistoryPage user={user} isGuest beanUidFilter={beanB} />);

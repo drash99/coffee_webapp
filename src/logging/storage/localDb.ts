@@ -260,6 +260,8 @@ export type LocalBrewWithBean = BrewRow & {
     | 'roasted_on'
     | 'cup_flavor_notes'
     | 'beverage_type'
+    | 'beverage_details'
+    | 'created_at'
   > | null;
   grinders: Pick<GrinderRow, 'uid' | 'maker' | 'model'> | null;
 };
@@ -290,6 +292,8 @@ export function localListBrewsWithBeans(): LocalBrewWithBean[] {
             roasted_on: bean.roasted_on,
             cup_flavor_notes: bean.cup_flavor_notes,
             ...(bean.beverage_type ? { beverage_type: bean.beverage_type } : {}),
+            ...(bean.beverage_details ? { beverage_details: bean.beverage_details } : {}),
+            ...(bean.created_at ? { created_at: bean.created_at } : {}),
           }
         : null,
       grinders: grinder
